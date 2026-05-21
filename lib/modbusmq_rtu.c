@@ -549,29 +549,20 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
         tios.c_cflag |= CSTOPB;
     }
 
-    // FIXME: disable parity for now for pseudo terminal
-    if (0)
+    /* PARENB: enable parity bit; PARODD: use odd instead of even */
+    if (rtu->parity == 'N')
     {
-        
-        /* PARENB       Enable parity bit
-        PARODD       Use odd parity instead of even */
-        if (rtu->parity == 'N')
-        {
-            /* None */
-            tios.c_cflag &= ~PARENB;
-        }
-        else if (rtu->parity == 'E')
-        {
-            /* Even */
-            tios.c_cflag |= PARENB;
-            tios.c_cflag &= ~PARODD;
-        }
-        else
-        {
-            /* Odd */
-            tios.c_cflag |= PARENB;
-            tios.c_cflag |= PARODD;
-        }
+        tios.c_cflag &= ~PARENB;
+    }
+    else if (rtu->parity == 'E')
+    {
+        tios.c_cflag |= PARENB;
+        tios.c_cflag &= ~PARODD;
+    }
+    else
+    {
+        tios.c_cflag |= PARENB;
+        tios.c_cflag |= PARODD;
     }
     
         /* Raw input */
