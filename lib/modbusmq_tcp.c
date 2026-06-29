@@ -188,6 +188,32 @@ modbusmq_tcp_free(modbusmq_context_t *context)
 int
 modbusmq_tcp_flush(modbusmq_context_t *context)
 {
+    if (!context || context->fd <= 0)
+    {
+        return 0;
+    }
+
+    char drain_buf[256];
+    int  flags = fcntl(context->fd, F_GETFL, 0);
+
+    // Temporarily set non-blocking so we can drain without hanging
+    fcntl(context->fd, F_SETFL, flags | O_NONBLOCK);
+
+    int drained = 0;
+    int rc;
+    while ((rc = read(context->fd, drain_buf, sizeof(drain_buf))) > 0)
+    {
+        drained += rc;
+    }
+
+    // Restore original flags
+    fcntl(context->fd, F_SETFL, flags);
+
+    if (drained > 0)
+    {
+        modbusmq_logf(LOG_INFO, "tcp_flush: drained %d stale bytes from socket\n", drained);
+    }
+    
     return 0;
 }
 

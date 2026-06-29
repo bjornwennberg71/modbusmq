@@ -131,6 +131,10 @@ modbusmq_config_dataformat(const char *value)
     {
         return ModbusmqDataFormat_float_dcba;
     }
+    else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_CDAB) == 0)
+    {
+        return ModbusmqDataFormat_float_cdab;
+    }
 
     modbusmq_logf(LOG_ERROR, "Unsupported format: %s\n", value);
     assert(0);
@@ -151,7 +155,7 @@ int modbusmq_config_query_mode(const char *key)
     // you can also use numbers instead of text
     //
     int
-        value = strtol(key, NULL, 0);
+        value = strtod(key, NULL);
     if (value >= ModbusmqQueryModeMin || value <= ModbusmqQueryModeMax)
     {
         return value;
@@ -271,15 +275,15 @@ modbusmq_config_parse(const char *filename)
         }
         else if (strcmp(key, "modbusmq.baudrate") == 0)
         {
-            modbusmq_config->modbusmq_baudrate = strtol(value, NULL, 0);
+            modbusmq_config->modbusmq_baudrate = strtod(value, NULL);
         }
         else if (strcmp(key, "modbusmq.stopbit") == 0)
         {
-            modbusmq_config->modbusmq_stopbit = strtol(value, NULL, 0);
+            modbusmq_config->modbusmq_stopbit = strtod(value, NULL);
         }
         else if (strcmp(key, "modbusmq.databit") == 0)
         {
-            modbusmq_config->modbusmq_databit = strtol(value, NULL, 0);
+            modbusmq_config->modbusmq_databit = strtod(value, NULL);
         }
         else if (strcmp(key, "modbusmq.parity") == 0)
         {
@@ -287,15 +291,15 @@ modbusmq_config_parse(const char *filename)
         }
         else if (strcmp(key, "modbusmq.rts_delay") == 0)
         {
-            modbusmq_config->modbusmq_rts_delay_us = strtol(value, NULL, 0);
+            modbusmq_config->modbusmq_rts_delay_us = strtod(value, NULL);
         }
         else if (strcmp(key, "modbusmq.frame_timeout") == 0)
         {
-            modbusmq_config->modbusmq_frame_timeout_ms = strtol(value, NULL, 0);
+            modbusmq_config->modbusmq_frame_timeout_ms = strtod(value, NULL);
         }
         else if (strcmp(key, "input.offset_size") == 0)
         {
-            modbusmq_config->offset_size = strtol(value, NULL, 0);
+            modbusmq_config->offset_size = strtod(value, NULL);
         }
         else if (strcmp(key, "input.query_mode") == 0)
         {
@@ -318,7 +322,7 @@ modbusmq_config_parse(const char *filename)
                 return -1;
             }
             int
-                nvalue = strtol(value, NULL, 0);
+                nvalue = (int)strtoul(value, NULL, 0);
             if (nvalue < 0 || nvalue > 100)
             {
                 fprintf(stderr, "%d: %s must be between [0..100]\n", line_num, key);
@@ -366,7 +370,7 @@ modbusmq_config_parse(const char *filename)
             
             if (strcmp(input_key, "slave") == 0)
             {
-                input->slave = strtol(value, NULL, 0);
+                input->slave = (int)strtoul(value, NULL, 0);
             }
             else if (strcmp(input_key, "type") == 0)
             {
@@ -378,19 +382,19 @@ modbusmq_config_parse(const char *filename)
             }
             else if (strcmp(input_key, "address") == 0)
             {
-                input->address = strtol(value, NULL, 0);
+                input->address = (int)strtoul(value, NULL, 0);
             }
             else if (strcmp(input_key, "address_offset") == 0)
             {
-                input->address_offset = strtol(value, NULL, 0);
+                input->address_offset = (int)strtoul(value, NULL, 0);
             }
             else if (strcmp(input_key, "naddress") == 0)
             {
-                input->naddress = strtol(value, NULL, 0);
+                input->naddress = (int)strtoul(value, NULL, 0);
             }
             else if (strcmp(input_key, "interval") == 0)
             {
-                input->interval = strtol(value, NULL, 0);
+                input->interval = strtod(value, NULL);
             }
             else if (strcmp(input_key, "channel.max") == 0)
             {
@@ -400,7 +404,7 @@ modbusmq_config_parse(const char *filename)
                     return -1;
                 }
                 int
-                    nvalue = strtol(value, NULL, 0);
+                    nvalue = (int)strtoul(value, NULL, 0);
                 if (nvalue <= 0 || nvalue > 100)
                 {
                     fprintf(stderr, "%d: %s must be between [1..100]\n", line_num, key);
@@ -445,7 +449,7 @@ modbusmq_config_parse(const char *filename)
 
                 if (strcmp(channel_key, "offset") == 0)
                 {
-                    channel->offset = strtol(value, NULL, 0);
+                    channel->offset = (int)strtoul(value, NULL, 0);
                 }
                 else if (strcmp(channel_key, "format") == 0)
                 {
@@ -462,6 +466,7 @@ modbusmq_config_parse(const char *filename)
                         case ModbusmqDataFormat_float_abcd:
                         case ModbusmqDataFormat_float_badc:
                         case ModbusmqDataFormat_float_dcba:
+                        case ModbusmqDataFormat_float_cdab:
                         channel->length = 4; break;
                         default:
                         channel->length = 2; break; // TODO: write warning of unknown length
@@ -485,7 +490,7 @@ modbusmq_config_parse(const char *filename)
                 }
                 else if (strcmp(channel_key, "value") == 0)
                 {
-                    channel->value = (float)strtol(value, NULL, 0);
+                    channel->value = strtod(value, NULL);
                 }
             }
             else

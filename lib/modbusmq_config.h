@@ -33,7 +33,8 @@ enum ModbusmqDataFormat
     ModbusmqDataFormat_float_ba, // float
     ModbusmqDataFormat_float_abcd, // float
     ModbusmqDataFormat_float_badc, // float
-    ModbusmqDataFormat_float_dcba // float
+    ModbusmqDataFormat_float_dcba, // float
+    ModbusmqDataFormat_float_cdab  // float, low word first (common in industrial Modbus devices)
 
 };
 
@@ -46,6 +47,7 @@ enum ModbusmqDataFormat
 #define MODBUSMQ_FORMAT_FLOAT_ABCD "float_abcd"
 #define MODBUSMQ_FORMAT_FLOAT_BADC "float_badc"
 #define MODBUSMQ_FORMAT_FLOAT_DCBA "float_dcba"
+#define MODBUSMQ_FORMAT_FLOAT_CDAB "float_cdab"
 
 typedef enum ModbusmqQueryMode_e
 {
@@ -114,8 +116,8 @@ typedef struct modbusmq_config_t
 } modbusmq_config_t;
 
     
-extern int               modbusmq_config_parse(const char *filename);
-extern const char *      modbusmq_config_find(const char *key);
+extern int                 modbusmq_config_parse(const char *filename);
+extern const char *        modbusmq_config_find(const char *key);
 extern modbusmq_config_t * modbusmq_config_get();
 
 // utility functions

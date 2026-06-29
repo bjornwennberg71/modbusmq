@@ -26,6 +26,7 @@
 #include <poll.h>
 
 const char *version = "1.03";
+#define MQTT_RECONNECT_INTERVAL_MS 5000 // retry every 5 seconds
 
 //
 // global parameters from settings / argument line 
@@ -35,11 +36,15 @@ typedef struct global_info
     char config_filename[300];
     int  has_config;
     int  has_mqtt;
-    
+    int  mqtt_connected;              // 1 = connected to broker, 0 = disconnected
+    millitime_t mqtt_reconnect_at_ms; // when to attempt next reconnect
+ 
     int verbose;
     struct mosquitto *mosq;
 } global_info;
+ 
 
+ 
 static global_info GI;
 
 //////////////////////////////////////////////////////////////////////////////
@@ -96,13 +101,18 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         sprintf(value, "%.3f", f);
 
 #if MQTT_ENABLED
-        if (GI.has_mqtt)
+        if (GI.has_mqtt && GI.mqtt_connected)
         {
             int
                 rc = mosquitto_publish(GI.mosq, NULL, channel->topic, strlen(value), value, 0, true);
-            if (rc != 0)
+            if (rc == MOSQ_ERR_NO_CONN || rc == MOSQ_ERR_CONN_LOST)
             {
-                fprintf(stderr, "Unable to publish to MQTT %s=%s\n", channel->topic, value);
+                modbusmq_logf(LOG_INFO, "MQTT: lost connection while publishing, will reconnect\n");
+                GI.mqtt_connected = 0;
+            }
+            else if (rc != MOSQ_ERR_SUCCESS)
+            {
+                fprintf(stderr, "Unable to publish to MQTT %s=%s (rc=%d)\n", channel->topic, value, rc);
             }
         }
 #endif
@@ -179,7 +189,9 @@ parse_argv(int argc, char **argv)
     return 0;
     
 }
-
+ 
+ 
+ 
 // set nonblocking mode on socket
 int set_nonblocking(int fd)
 {
@@ -187,6 +199,42 @@ int set_nonblocking(int fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+//////////////////////////////////////////////////////////////////////////////
+//
+// Attempt to reconnect to MQTT broker.
+// Returns 1 if connected, 0 if not.
+//
+#if MQTT_ENABLED
+int
+mqtt_try_reconnect(modbusmq_connect_t *connect)
+{
+    modbusmq_config_t
+        *modbusmq_config = modbusmq_config_get();
+ 
+    millitime_t now = millitime();
+ 
+    if (now < GI.mqtt_reconnect_at_ms)
+    {
+        return 0; // not time yet
+    }
+ 
+    GI.mqtt_reconnect_at_ms = now + MQTT_RECONNECT_INTERVAL_MS;
+ 
+    modbusmq_logf(LOG_INFO, "MQTT: attempting reconnect to %s:%d\n", connect->device, connect->port);
+ 
+    int rc = mosquitto_reconnect(GI.mosq);
+    if (rc == MOSQ_ERR_SUCCESS)
+    {
+        modbusmq_logf(LOG_INFO, "MQTT: reconnected successfully\n");
+        GI.mqtt_connected = 1;
+        return 1;
+    }
+ 
+    modbusmq_logf(LOG_INFO, "MQTT: reconnect failed (rc=%d), will retry in %d ms\n", rc, MQTT_RECONNECT_INTERVAL_MS);
+    return 0;
+}
+#endif
+ 
 //////////////////////////////////////////////////////////////////////////////
 // 
 // main
@@ -337,8 +385,14 @@ main(int argc, char **argv)
         rc = mosquitto_connect(GI.mosq, connect.device, connect.port, 3600);
         if (rc != 0)
         {
-            fprintf(stderr, "Unable to connect to MQTT server, hostname=%s, port=%s. Action=Disable MQTT\n", connect.device, connect.device);
-            GI.has_mqtt = 0;
+            fprintf(stderr, "Unable to connect to MQTT server, hostname=%s, port=%d. Will retry every %d ms\n",
+                    connect.device, connect.port, MQTT_RECONNECT_INTERVAL_MS);
+            GI.mqtt_connected = 0;
+            GI.mqtt_reconnect_at_ms = millitime() + MQTT_RECONNECT_INTERVAL_MS;
+        }
+        else
+        {
+            GI.mqtt_connected = 1;
         }
     }
 #else
@@ -405,21 +459,22 @@ main(int argc, char **argv)
 
             memset(pollfds, 0, sizeof(pollfds));
             int
-                modbusmq_fd = modbusmq_loop_prepare(context, &millisleep, &pollfds[0].events),
-                mosq_fd = 0;
-
+                modbusmq_fd = modbusmq_loop_prepare(context, &millisleep, &pollfds[0].events);
+ 
             pollfds[0].fd = modbusmq_fd;
             pollfds[0].events |= POLLERR | POLLHUP;
             nfds++;
 
 #if MQTT_ENABLED
-            if (GI.has_mqtt)
+            if (GI.has_mqtt && GI.mqtt_connected)
             {
-                mosq_fd   = mosquitto_socket(GI.mosq);
-
-                pollfds[1].fd = modbusmq_fd;
-                pollfds[1].events = POLLIN | POLLOUT | POLLERR | POLLHUP;
-                nfds++;
+                int mosq_fd = mosquitto_socket(GI.mosq);
+                if (mosq_fd >= 0)
+                {
+                    pollfds[1].fd = mosq_fd;
+                    pollfds[1].events = POLLIN | POLLOUT | POLLERR | POLLHUP;
+                    nfds++;
+                }
             }
 #endif
             
@@ -452,28 +507,46 @@ main(int argc, char **argv)
                 }
 
 #if MQTT_ENABLED
-                if (GI.has_mqtt && pollfds[1].revents & (POLLIN | POLLOUT))
+                if (GI.has_mqtt)
                 {
-                    
-                    //
-                    // mosquitto
-                    //
-                    // process mosquitto read
-                    rc = mosquitto_loop_read(GI.mosq, 1);
-                    if (rc == MOSQ_ERR_CONN_LOST)
+                    if (!GI.mqtt_connected)
                     {
-                        /* We've been disconnected from the server */
-                        mosquitto_reconnect(GI.mosq);
-                        mosq_fd = mosquitto_socket(GI.mosq);
+                        // Not connected — try to reconnect on a timer
+                        mqtt_try_reconnect(&connect);
                     }
-                    
-                    // process write
-                    if (mosquitto_want_write(GI.mosq))
+                    else
                     {
-                        mosquitto_loop_write(GI.mosq, 1);
+                        int mosq_fd = mosquitto_socket(GI.mosq);
+    
+                        if (mosq_fd < 0)
+                        {
+                            // Socket gone — mark as disconnected
+                            modbusmq_logf(LOG_INFO, "MQTT: socket lost, will reconnect\n");
+                            GI.mqtt_connected = 0;
+                            GI.mqtt_reconnect_at_ms = millitime() + MQTT_RECONNECT_INTERVAL_MS;
+                        }
+                        else if (pollfds[1].revents & (POLLIN | POLLOUT))
+                        {
+                            // process mosquitto read
+                            rc = mosquitto_loop_read(GI.mosq, 1);
+                            if (rc == MOSQ_ERR_CONN_LOST || rc == MOSQ_ERR_NO_CONN)
+                            {
+                                modbusmq_logf(LOG_INFO, "MQTT: connection lost, will reconnect\n");
+                                GI.mqtt_connected = 0;
+                                GI.mqtt_reconnect_at_ms = millitime() + MQTT_RECONNECT_INTERVAL_MS;
+                            }
+                            else
+                            {
+                                // process write
+                                if (mosquitto_want_write(GI.mosq))
+                                {
+                                    mosquitto_loop_write(GI.mosq, 1);
+                                }
+                                // process misc
+                                mosquitto_loop_misc(GI.mosq);
+                            }
+                        }
                     }
-                    // process misc
-                    mosquitto_loop_misc(GI.mosq);
                 }
 #endif
             }

@@ -27,6 +27,8 @@
 
 static int modbusmq_debug = 0;
 
+static void modbusmq_flush(modbusmq_context_t *context);
+
 /**
  * 
  * @brief set the debug level
@@ -517,8 +519,22 @@ modbusmq_read_float_dcba(const uint8_t *data)
     return f;
 }
 
+float
+modbusmq_read_float_cdab(const uint8_t *data)
+{
+    float f;
+    uint8_t a, b, c, d;
+    a = data[0] & 0xff;
+    b = data[1] & 0xff;
+    c = data[2] & 0xff;
+    d = data[3] & 0xff;
+    uint32_t i = (c << 24) | (d << 16) | (a << 8) | (b << 0);
+    memcpy(&f, &i, 4);
+    return f;
+}
+
 /**
- * 
+ *
  * @brief converts data from msg using input and channel to get a float value
  * this is a utility function used to print default value in type of float for all channels
  *
@@ -549,6 +565,7 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
         case ModbusmqDataFormat_float_abcd:  f = modbusmq_read_float_abcd(data + offset); break;
         case ModbusmqDataFormat_float_badc:  f = modbusmq_read_float_badc(data + offset); break;
         case ModbusmqDataFormat_float_dcba:  f = modbusmq_read_float_dcba(data + offset); break;
+        case ModbusmqDataFormat_float_cdab:  f = modbusmq_read_float_cdab(data + offset); break;
         case ModbusmqDataFormat_ab:          f = modbusmq_read_int16_ab(data + offset);  value_len = 2; break;
         case ModbusmqDataFormat_ba:          f = modbusmq_read_int16_ba(data + offset); value_len = 2;break;
         case ModbusmqDataFormat_abcd:        f = modbusmq_read_int32_abcd(data + offset); break;
@@ -1842,7 +1859,10 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
             // Ensure what we have read matches what we requested
             if (modbusmq_check_header(context, msg) < 0)
             {
-                //assert(0);
+                modbusmq_flush(context);
+                // Reset reader so next poll starts fresh
+                memset(reader, 0, sizeof(*reader));
+                reader->length = context->header_length;
                 rc = -2;
             }
             
