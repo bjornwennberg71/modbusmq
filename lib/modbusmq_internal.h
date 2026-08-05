@@ -113,6 +113,12 @@ typedef struct modbusmq_context_t
 
     int                   req_header_min;       // minimum number of bytes of header needed to compute the length
     int                   res_header_min;       // minimum number of bytes of header needed to compute the length
+
+                         // a frame was discarded, so the stream may still hold
+                         // bytes belonging to it. Drain to silence before the
+                         // next request goes out, or its response gets read
+                         // through the leftovers of the previous one.
+    int                   resync_pending;
     
                          // callback for post_message
     void                 (*message_cb)(struct modbusmq_context_t *, modbusmq_msg_t *);

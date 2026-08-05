@@ -12,6 +12,12 @@ extern "C" {
 #endif
 
 #define MODBUSMQ_DEVICE_MAX 100
+
+//
+// Minimum inter-frame silence, in microseconds. Modbus specifies 3.5 character
+// times, but fixes it at 1.750 ms for baud rates above 19200.
+//
+#define MODBUSMQ_RTU_QUIET_MIN_US 1750
 typedef struct modbusmq_rtu_context_t
 {
     char        device[100];

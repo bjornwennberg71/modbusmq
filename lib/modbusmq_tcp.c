@@ -219,8 +219,8 @@ modbusmq_tcp_flush(modbusmq_context_t *context)
     {
         modbusmq_logf(LOG_INFO, "tcp_flush: drained %d stale bytes from socket\n", drained);
     }
-    
-    return 0;
+
+    return drained;
 }
 
 

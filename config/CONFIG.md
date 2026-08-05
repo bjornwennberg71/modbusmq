@@ -44,6 +44,24 @@ modbusmq.rts_delay     = 10000   # microseconds — pause before transmitting (R
 
 `rts_delay` defaults to 10000 µs (10 ms). Needed on half-duplex RS-485 to let the bus settle before transmitting. Increase if you see lost frames.
 
+#### Setting `frame_timeout` for RTU
+
+Set it above the device's worst-case turnaround, not its typical one. When a
+response arrives *after* its request has timed out, that reply is still on the
+bus with nobody waiting for it — and RTU frames carry no transaction id, so
+nothing in the frame itself says which request it answers.
+
+The library handles this: on a timeout, a rejected frame, or a failed CRC it
+drains the line until it has been silent for a full inter-frame gap (3.5
+character times), so the next request starts from a real frame boundary. That
+costs up to a few hundred milliseconds at low baud rates, and the affected poll
+publishes nothing and logs the reason — deliberately, because the alternative is
+publishing another block's registers under this block's topics.
+
+A timeout that is merely tight therefore shows up as gaps and `Waited ... ms for
+a response` in the log rather than as wrong values. If you see those regularly,
+raise `frame_timeout`.
+
 ---
 
 ## Inputs

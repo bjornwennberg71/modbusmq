@@ -31,6 +31,22 @@
 #define MODBUSMQ_MIN(x,y) ((x) < (y) ? (x) : (y))
 #define MODBUSMQ_MAX(x,y) ((x) > (y) ? (x) : (y))
 
+//
+// Error codes returned by modbusmq_loop_write_read().
+//
+// MODBUSMQ_ERR_TRANSPORT means the connection itself is gone and the caller
+// must reconnect before anything else will work.
+//
+// MODBUSMQ_ERR_PROTOCOL means a frame was rejected (bad slave id, function,
+// byte count or CRC) and the library has already discarded it and resynced the
+// stream. The connection is still good: report it and carry on — the next
+// queued request starts from a clean stream. Tearing down the connection for
+// this is both unnecessary and counterproductive, since it drops every other
+// pending subscription with it.
+//
+#define MODBUSMQ_ERR_TRANSPORT (-1)
+#define MODBUSMQ_ERR_PROTOCOL  (-2)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -143,6 +159,8 @@ extern float modbusmq_read_float_abcd(const uint8_t *data);
 extern float modbusmq_read_float_badc(const uint8_t *data);
 extern float modbusmq_read_float_dcba(const uint8_t *data);
 extern float modbusmq_read_channel(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel);
+// 0 when the channel lies inside the received data, < 0 (and logged) when it does not
+extern int   modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel);
 
 extern void  modbusmq_write_int16_ab(uint8_t *data, uint16_t value);
 extern void  modbusmq_write_int32_abcd(uint8_t *data, uint32_t value);

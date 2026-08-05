@@ -98,9 +98,18 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         modbusmq_channel_t
             *channel = &input->channels[c];
 
+        //
+        // Skip rather than publish: a channel outside the received data decodes
+        // as 0, and a published 0 is indistinguishable from a real reading.
+        //
+        if (modbusmq_channel_in_range(context, msg, input, channel) != 0)
+        {
+            continue;
+        }
+
         float
             f = modbusmq_read_channel(context, msg, input, channel);
-        
+
                 
         sprintf(value, "%.3f", f);
 
@@ -552,7 +561,17 @@ main(int argc, char **argv)
                 if (modbus_pollfd_idx >= 0 && (pollfds[modbus_pollfd_idx].revents & (POLLIN | POLLOUT | POLLERR | POLLHUP)))
                 {
                     rc = modbusmq_loop_write_read(context, pollfds[modbus_pollfd_idx].revents);
-                    if (rc < 0)
+                    if (rc == MODBUSMQ_ERR_PROTOCOL)
+                    {
+                        //
+                        // A frame was rejected and the library has resynced the
+                        // stream. The connection is fine — reconnecting here
+                        // would throw away every other subscription's progress
+                        // over one bad frame. Report it and keep polling.
+                        //
+                        modbusmq_logf(LOG_ERROR, "modbusmq_loop_write_read: frame rejected, stream resynced, continuing with next request\n");
+                    }
+                    else if (rc < 0)
                     {
                         modbusmq_logf(LOG_ERROR, "modbusmq_loop_write_read: error rc=%d, err=%s. Disconnecting, will reconnect\n", rc, strerror(errno));
                         modbusmq_close(context);
