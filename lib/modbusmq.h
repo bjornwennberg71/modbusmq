@@ -15,8 +15,8 @@
 // DEFINES ///////////////////////////////////////////////////////////////////
 
 #define MODBUSMQ_VERSION_MAJOR 1
-#define MODBUSMQ_VERSION_MINOR 0
-#define MODBUSMQ_VERSION_BUILD 1
+#define MODBUSMQ_VERSION_MINOR 1
+#define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
 #define MODBUSMQ_STRINGIFY(x)  MODBUSMQ_STRINGIFY_(x)
