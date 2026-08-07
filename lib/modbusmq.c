@@ -19,7 +19,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <math.h>
 
 #include <sys/ioctl.h>
 #include <netdb.h>
@@ -841,7 +840,9 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
     }
     else if (channel->mod < 0)
     {
-        f /= fabs(channel->mod);
+        // mod is an int; negate after the conversion to float, since INT_MIN
+        // has no positive counterpart to take the magnitude of
+        f /= -(float)channel->mod;
     }
     if (channel->mul != 0)
     {
@@ -918,7 +919,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
         buf[200];
     if (connect->connect_type == MODBUSMQ_CONNECT_TCP)
     {
-        int matched = sscanf(input_string, "tcp://%255[^:]:%d", connect->device, &connect->port);
+        int matched = sscanf(input_string, "tcp://%199[^:]:%d", connect->device, &connect->port);
 
         if (matched == 2)
         {
@@ -929,7 +930,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     else if (connect->connect_type == MODBUSMQ_CONNECT_RTU)
     {
         // rtu:///device:baud:stopbit:databits:parity
-        int matched = sscanf(input_string, "rtu://%255[^:]:%d:%d:%d:%c", connect->device, &connect->baudrate, &connect->stopbit, &connect->databits, &connect->parity);
+        int matched = sscanf(input_string, "rtu://%199[^:]:%d:%d:%d:%c", connect->device, &connect->baudrate, &connect->stopbit, &connect->databits, &connect->parity);
         
         if (modbusmq_debug)
         {
@@ -950,7 +951,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     else if (connect->connect_type == MODBUSMQ_CONNECT_MQTT)
     {
 
-        int matched = sscanf(input_string, "mqtt://%255[^:]:%d", connect->device, &connect->port);
+        int matched = sscanf(input_string, "mqtt://%199[^:]:%d", connect->device, &connect->port);
 
         // connect->port = strtod(buf, NULL);
         if (modbusmq_debug)
