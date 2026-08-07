@@ -212,8 +212,8 @@ extern void  modbusmq_write_int64_abcdefgh(uint8_t *data, uint64_t value);
 // tcp://hostname:port
 // tcp://192.168.3.177:502
 //    
-// rtu:///device:baudrate:parity:databit:stopbit
-// rtu:///dev/ttyUSB1:9600:N:8:1
+// rtu:///device:baudrate:stopbit:databits:parity
+// rtu:///dev/ttyUSB1:9600:1:8:N
 typedef struct modbusmq_connect_t
 {
     // either /dev/ttyUSB123 or tcp connect string
