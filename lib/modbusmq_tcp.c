@@ -791,7 +791,9 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "res: transaction id incorrect\n");
+            modbusmq_logf(LOG_ERROR, "%s transaction id mismatch: req[0x%02X%02X] != res[0x%02X%02X]. action: discard frame\n",
+                          modbusmq_msg_tag(context, msg),
+                          writer->buf[0], writer->buf[1], reader->buf[0], reader->buf[1]);
             return -2;
         }
     }
@@ -806,7 +808,9 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "protocol != 0\n");
+            modbusmq_logf(LOG_ERROR, "%s protocol id is not 0: req[0x%02X%02X] res[0x%02X%02X]. action: discard frame\n",
+                          modbusmq_msg_tag(context, msg),
+                          writer->buf[2], writer->buf[3], reader->buf[2], reader->buf[3]);
             return -3; // protocol != 0
         }
     }
@@ -832,7 +836,8 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "res_length mismatch: res_length = %d\n", msg_length);
+                modbusmq_logf(LOG_ERROR, "%s response declares an unusable length of %d bytes. action: discard frame\n",
+                              modbusmq_msg_tag(context, msg), msg_length);
                 return -4;
             }
         }
@@ -847,7 +852,8 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "slave id mismatch\n");
+            modbusmq_logf(LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
+                          modbusmq_msg_tag(context, msg), writer->buf[6], reader->buf[6]);
             return -5; // slave id not the same
         }
     }
@@ -861,15 +867,31 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            if (reader->buf[7] > 0x80)
+            // & 0x80 rather than > 0x80, matching the RTU side: the exception
+            // bit is a flag, not a magnitude
+            if (reader->buf[7] & 0x80)
             {
-                // error
-                modbusmq_logf(LOG_ERROR, "error in response[code=%d]: Please check request!\n", reader->buf[8]);
+                //
+                // Exception reply: buf[7] is function|0x80 and buf[8] the code.
+                // buf[8] is one byte past what this pass is guaranteed to hold,
+                // so wait for it — reporting it at xmit == 8 prints whatever
+                // the buffer happened to contain, which reads as "code 0".
+                //
+                if (reader->xmit < 9)
+                {
+                    return 0;
+                }
+
+                modbusmq_logf(LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X. action: discard frame\n",
+                              modbusmq_msg_tag(context, msg), reader->buf[8], writer->buf[7]);
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "function not the same: req[%d] != res[%d]\n", writer->buf[7], reader->buf[8]);
-            }            
+                // the response function lives in buf[7], same as the request —
+                // buf[8] is already payload
+                modbusmq_logf(LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
+                              modbusmq_msg_tag(context, msg), writer->buf[7], reader->buf[7]);
+            }
             return -6; // error in frame
         }
     }

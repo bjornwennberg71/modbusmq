@@ -247,7 +247,143 @@ modbusmq_set_subscription_callback(modbusmq_context_t *context,  void (*subscrib
 }
 
 /**
- * 
+ *
+ * @brief sets the callback to be called when a request is given up on
+ *
+ * The log lines name the failing device, but a caller that has to act on it —
+ * mark a slave offline, back off, raise an alarm — should not have to parse
+ * them. This hands over the failed message itself, so slave id, address and
+ * req_id are readable directly.
+ *
+ * @param context: allocated context
+ * @param error_cb: function called with the failed message and a MODBUSMQ_ERR_* code
+ */
+void
+modbusmq_set_error_callback(modbusmq_context_t *context, void (*error_cb)(modbusmq_context_t *context, modbusmq_msg_t *msg, int error))
+{
+    if (!context)
+    {
+        errno = EINVAL;
+        return;
+    }
+
+    context->error_cb = error_cb;
+}
+
+/**
+ *
+ * @brief the writer half of a message, or NULL when the request is not built yet
+ *
+ * frame[0] is the writer everywhere in practice, but the rest of the library
+ * resolves it through is_writer rather than assuming, and the decoders are not
+ * all forgiving about being handed the wrong half: modbusmq_tcp_frame_addr()
+ * asserts on a reader. Resolve it the same way here.
+ *
+ * @param msg: message to inspect
+ *
+ * @return the writer frame, or NULL when neither half holds a built request
+ */
+static modbusmq_frame_t *
+modbusmq_msg_writer(modbusmq_msg_t *msg)
+{
+    if (msg->frame[0].is_writer && msg->frame[0].length > 0)
+    {
+        return &msg->frame[0];
+    }
+
+    if (msg->frame[1].is_writer && msg->frame[1].length > 0)
+    {
+        return &msg->frame[1];
+    }
+
+    return NULL;
+}
+
+/**
+ *
+ * @brief build the "[req N slave S addr 0xAAAA]" prefix for an error line
+ *
+ * @param context: allocated context
+ * @param msg: the message the error concerns
+ *
+ * @return pointer to a static buffer, never NULL
+ */
+const char *
+modbusmq_msg_tag(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    static char
+        tag[64];
+
+    if (!context || !msg)
+    {
+        snprintf(tag, sizeof(tag), "[req ?]");
+        return tag;
+    }
+
+    modbusmq_frame_t
+        *writer = modbusmq_msg_writer(msg);
+
+    //
+    // A request that was never built has no slave or address to report — the
+    // req_id alone still ties the line to the transaction.
+    //
+    if (!writer)
+    {
+        snprintf(tag, sizeof(tag), "[req %u]", msg->req_id);
+        return tag;
+    }
+
+    snprintf(tag, sizeof(tag), "[req %u slave %d addr 0x%04X]",
+             msg->req_id,
+             modbusmq_frame_slave(context, writer),
+             modbusmq_frame_addr(context, writer));
+
+    return tag;
+}
+
+/**
+ *
+ * @brief allocate the next request id for this context
+ *
+ * @param context: allocated context
+ *
+ * @return a request id that has not been used before on this context
+ */
+static uint32_t
+modbusmq_next_req_id(modbusmq_context_t *context)
+{
+    context->req_id_next++;
+
+    // 0 reads as "never stamped" in a log line, so skip it on wrap
+    if (context->req_id_next == 0)
+    {
+        context->req_id_next = 1;
+    }
+
+    return context->req_id_next;
+}
+
+/**
+ *
+ * @brief report a failed request to the caller, if it asked to hear about them
+ *
+ * @param context: allocated context
+ * @param msg: the failed message
+ * @param error: MODBUSMQ_ERR_* code describing what went wrong
+ */
+static void
+modbusmq_report_error(modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
+{
+    if (!context->error_cb)
+    {
+        return;
+    }
+
+    context->error_cb(context, msg, error);
+}
+
+/**
+ *
  * @brief connects to the device specified in the context
  * 
  * @param context: allocated context
@@ -640,9 +776,10 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
 
     if (offset < 0 || nbytes < 0 || offset + size > nbytes)
     {
-        modbusmq_logf(LOG_ERROR, "channel %s: offset %d (+%d bytes) is outside the %d bytes received for slave %d addr 0x%04X. action: skip channel\n",
+        modbusmq_logf(LOG_ERROR, "%s channel %s: offset %d (+%d bytes) is outside the %d bytes received. action: skip channel\n",
+                      modbusmq_msg_tag(context, msg),
                       channel->topic ? channel->topic : "?",
-                      offset, size, nbytes, input->slave, input->address);
+                      offset, size, nbytes);
         return -1;
     }
 
@@ -1415,9 +1552,9 @@ modbusmq_frame_write_mask_registers( struct modbusmq_context_t *context, modbusm
  */
 
 int
-modbusmq_post_internal(modbusmq_context_t *context, const modbusmq_msg_t *msg, int flags)
+modbusmq_post_internal(modbusmq_context_t *context, modbusmq_msg_t *msg, int flags)
 {
-    
+
     modbusmq_msg_wrapper_t
         *wrapper = (modbusmq_msg_wrapper_t *)malloc(sizeof(modbusmq_msg_wrapper_t));
     if (!wrapper)
@@ -1425,6 +1562,13 @@ modbusmq_post_internal(modbusmq_context_t *context, const modbusmq_msg_t *msg, i
         modbusmq_logf(LOG_ERROR, "Unable to allocate message wrapper\n");
         return -1;
     }
+
+    //
+    // Stamp before the copy so the caller's message — for a subscription, the
+    // timer's template — carries the same id as the queued one.
+    //
+    msg->req_id = modbusmq_next_req_id(context);
+
     memset(wrapper, 0, sizeof(modbusmq_msg_wrapper_t));
     memcpy(&wrapper->msg, msg, sizeof(modbusmq_msg_t));
 
@@ -2170,9 +2314,8 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
     //
     if (rc != 0)
     {
-        modbusmq_logf(LOG_ERROR, "discarding response for slave %d addr 0x%04X: %s (rc=%d)\n",
-                      modbusmq_frame_slave(context, &wrapper->msg.frame[0]),
-                      modbusmq_frame_addr(context, &wrapper->msg.frame[0]),
+        modbusmq_logf(LOG_ERROR, "%s discarding response: %s (rc=%d). action: discard frame and resync\n",
+                      modbusmq_msg_tag(context, &wrapper->msg),
                       rc < 0 ? "failed validation" : "incomplete frame",
                       rc);
 
@@ -2182,6 +2325,8 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
         // case the frame we gave up on is still on its way
         modbusmq_flush(context);
         context->resync_pending = 1;
+
+        modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_PROTOCOL);
 
         context->msg_wrapper_head = context->msg_wrapper_head->next;
         free(wrapper);
@@ -2363,8 +2508,12 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         if (request_sent && (time_now - context->last_write_ms) >= context->frame_timeout_ms)
         {
             // discard this packages
-            modbusmq_logf(LOG_ERROR, "Waited %d ms for a response, discarding request and continuing...\n", context->frame_timeout_ms);
-            
+            modbusmq_logf(LOG_ERROR, "%s no response within %d ms. action: discard request and continue\n",
+                          modbusmq_msg_tag(context, &wrapper->msg),
+                          context->frame_timeout_ms);
+
+            modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TIMEOUT);
+
             if (modbusmq_debug)
             {
                 // modbusmq_logf(LOG_ERROR, "res.res_length = %d\nres.res_received = %d\n", wrapper->msg.res_length, wrapper->msg.res_xmit);
@@ -2474,6 +2623,8 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
 
     assert(writer != reader);
 
+    msg->req_id = modbusmq_next_req_id(context);
+
     struct pollfd pollfds[10];
 
     millitime_t
@@ -2549,12 +2700,16 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                     // in case the real answer is still coming, but remember the
                     // failure in case it never does.
                     //
-                    modbusmq_logf(LOG_ERROR, "modbusmq_send: frame rejected, stream resynced\n");
+                    modbusmq_logf(LOG_ERROR, "%s frame rejected, stream resynced. action: keep waiting for the real response\n",
+                                  modbusmq_msg_tag(context, msg));
+                    modbusmq_report_error(context, msg, MODBUSMQ_ERR_PROTOCOL);
                     result = MODBUSMQ_ERR_PROTOCOL;
                 }
                 else if (rc < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "modbusmq_send: error rc=%d, err=%s\n", rc, strerror(errno));
+                    modbusmq_logf(LOG_ERROR, "%s transport error rc=%d, err=%s. action: give up\n",
+                                  modbusmq_msg_tag(context, msg), rc, strerror(errno));
+                    modbusmq_report_error(context, msg, MODBUSMQ_ERR_TRANSPORT);
                     result = MODBUSMQ_ERR_TRANSPORT;
                     break;
                 }
@@ -2568,9 +2723,11 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                     result = modbusmq_check(context, msg);
                     if (result != 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "modbusmq_send: response failed validation (rc=%d)\n", result);
+                        modbusmq_logf(LOG_ERROR, "%s response failed validation (rc=%d). action: discard frame and resync\n",
+                                      modbusmq_msg_tag(context, msg), result);
                         modbusmq_flush(context);
                         context->resync_pending = 1;
+                        modbusmq_report_error(context, msg, MODBUSMQ_ERR_PROTOCOL);
                         result = MODBUSMQ_ERR_PROTOCOL;
                     }
                     break;
@@ -2582,7 +2739,9 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
 
     if (result > 0)
     {
-        modbusmq_logf(LOG_ERROR, "modbusmq_send: no complete response within %d ms\n", mswait);
+        modbusmq_logf(LOG_ERROR, "%s no complete response within %d ms. action: give up\n",
+                      modbusmq_msg_tag(context, msg), mswait);
+        modbusmq_report_error(context, msg, MODBUSMQ_ERR_TIMEOUT);
     }
 
     return result;
@@ -2637,10 +2796,10 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         // message is now unanswerable: drop it so the queue moves on to the
         // next request instead of stalling until the frame timeout.
         //
-        modbusmq_logf(LOG_ERROR, "%s: discarding request for slave %d addr 0x%04X after rejected response\n",
-                      __FUNCTION__,
-                      modbusmq_frame_slave(context, &wrapper->msg.frame[0]),
-                      modbusmq_frame_addr(context, &wrapper->msg.frame[0]));
+        modbusmq_logf(LOG_ERROR, "%s response rejected. action: discard request and continue\n",
+                      modbusmq_msg_tag(context, &wrapper->msg));
+
+        modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_PROTOCOL);
 
         context->msg_wrapper_head = wrapper->next;
         free(wrapper);
@@ -2648,7 +2807,9 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
     else if (rc < 0)
     {
         context->err++;
-        modbusmq_logf(LOG_ERROR, "%s: error rc=%d\n", __FUNCTION__, rc);
+        modbusmq_logf(LOG_ERROR, "%s transport error rc=%d, err=%s\n",
+                      modbusmq_msg_tag(context, &wrapper->msg), rc, strerror(errno));
+        modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TRANSPORT);
     }
     else if (rc > 0)
     {

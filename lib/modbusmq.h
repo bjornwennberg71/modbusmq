@@ -14,8 +14,8 @@
 
 // DEFINES ///////////////////////////////////////////////////////////////////
 
-#define MODBUSMQ_VERSION_MAJOR 1
-#define MODBUSMQ_VERSION_MINOR 1
+#define MODBUSMQ_VERSION_MAJOR 2
+#define MODBUSMQ_VERSION_MINOR 0
 #define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
@@ -44,8 +44,14 @@
 // this is both unnecessary and counterproductive, since it drops every other
 // pending subscription with it.
 //
+// MODBUSMQ_ERR_TIMEOUT means the request went out but nothing came back within
+// the frame timeout. It is reported through the error callback only — the loop
+// functions never return it, since a timed-out request is dropped and the queue
+// simply moves on.
+//
 #define MODBUSMQ_ERR_TRANSPORT (-1)
 #define MODBUSMQ_ERR_PROTOCOL  (-2)
+#define MODBUSMQ_ERR_TIMEOUT   (-3)
 
 #ifdef __cplusplus
 extern "C" {
@@ -74,7 +80,21 @@ typedef struct modbusmq_frame_t
 //
 typedef struct modbusmq_msg_t
 {
-    int            msg_id;
+    int            msg_id;   // subscription timer id, 0 for one-shot messages
+
+                             // Identifies this one request/response attempt.
+                             // Stamped by the library on post/subscribe/send
+                             // and never reused, so a subscription polling the
+                             // same slave every 2 s gets a new req_id per poll.
+                             // Every error line carries it, and it is readable
+                             // from the message handed to the callbacks — that
+                             // is how a caller ties an error on a shared RTU
+                             // bus back to the device that produced it.
+                             //
+                             // RTU has no transaction id on the wire, so this
+                             // is a local correlation id, not something the
+                             // slave ever sees.
+    uint32_t       req_id;
 
     modbusmq_frame_t frame[2];
 } modbusmq_msg_t;
@@ -104,6 +124,17 @@ extern int modbusmq_loop_prepare(    struct modbusmq_context_t *context, milliti
     // callbacks
 extern void modbusmq_set_message_callback(struct modbusmq_context_t *context, void (*message_cb)(struct modbusmq_context_t *context, modbusmq_msg_t *msg));
 extern void modbusmq_set_subscription_callback(struct modbusmq_context_t *context, void (*subscription_cb)(struct modbusmq_context_t *context, modbusmq_msg_t *msg, struct modbusmq_input_t *input));
+    //
+    // Called whenever a request is given up on: a rejected frame, a frame
+    // timeout, or a dead connection. msg is the failed request/response pair —
+    // read msg->req_id, and modbusmq_frame_slave()/modbusmq_frame_addr() on
+    // msg->frame[0], to see which device on the bus is struggling. error is one
+    // of the MODBUSMQ_ERR_* codes above.
+    //
+    // msg is owned by the library and is freed as soon as the callback returns;
+    // copy anything that must outlive it.
+    //
+extern void modbusmq_set_error_callback(struct modbusmq_context_t *context, void (*error_cb)(struct modbusmq_context_t *context, modbusmq_msg_t *msg, int error));
 
 
     // libmodbusmq utility functions
@@ -147,6 +178,14 @@ extern int         modbusmq_frame_naddr(         struct modbusmq_context_t *cont
     
 extern int         modbusmq_frame_nbytes(        struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int         modbusmq_frame_error_code(    struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+
+//
+// "[req 4711 slave 3 addr 0x01F4]" — the prefix every error line starts with,
+// so a log from a bus with several slaves can be read one device at a time.
+// Returns a pointer to a static buffer: fine in this single-threaded library,
+// but never use it twice in the same printf-style call.
+//
+extern const char *modbusmq_msg_tag(struct modbusmq_context_t *context, modbusmq_msg_t *msg);
 
 //
 // other utility functions

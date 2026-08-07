@@ -1010,8 +1010,9 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "slave id different req[%d] != res[%d]. action: discard frame\n", writer->buf[0], reader->buf[0]);
-        return -2; 
+        modbusmq_logf(LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), writer->buf[0], reader->buf[0]);
+        return -2;
     }
 
     // check function
@@ -1025,19 +1026,26 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         // exception_code(1) + CRC(2) = 5 bytes total, always. buf[2] here
         // is the exception code, not a byte count — don't run it through
         // the normal length formula below.
-        if (reader->xmit >= 3)
-        {
-            modbusmq_logf(LOG_ERROR, "device returned Modbus exception code %d for function 0x%02X\n", reader->buf[2], writer->buf[1]);
-        }
+        //
+        // This runs again on every read that advances the frame, so log only
+        // on the pass that first shortens it — otherwise one exception reply
+        // reports itself once per chunk that arrives.
+        //
         if (reader->length != 5)
         {
+            if (reader->xmit >= 3)
+            {
+                modbusmq_logf(LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X\n",
+                              modbusmq_msg_tag(context, msg), reader->buf[2], writer->buf[1]);
+            }
             reader->length = 5;
         }
         return reader->length - reader->xmit;
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "function is different req[%02X] != res[%02X]. action: discard frame\n", writer->buf[1], reader->buf[1]);
+        modbusmq_logf(LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), writer->buf[1], reader->buf[1]);
         return -3;
     }
 
@@ -1063,11 +1071,10 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     }
     else if (reader->buf[2] != expected_nbytes)
     {
-        modbusmq_logf(LOG_ERROR, "byte count mismatch for slave %d function 0x%02X addr 0x%04X: "
+        modbusmq_logf(LOG_ERROR, "%s byte count mismatch for function 0x%02X: "
                                  "requested %d bytes, response declares %d. "
                                  "action: discard frame and resync\n",
-                      writer->buf[0], writer->buf[1],
-                      modbusmq_rtu_frame_addr(context, writer),
+                      modbusmq_msg_tag(context, msg), writer->buf[1],
                       expected_nbytes, reader->buf[2]);
         return -4;
     }
@@ -1078,7 +1085,8 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
 
     if (newlen < 0 || newlen > MODBUSMQ_FRAME_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "invalid frame length %d. action: discard frame and resync\n", newlen);
+        modbusmq_logf(LOG_ERROR, "%s invalid frame length %d. action: discard frame and resync\n",
+                      modbusmq_msg_tag(context, msg), newlen);
         return -5;
     }
 
@@ -1122,7 +1130,8 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     // shorter would index behind buf[] on the CRC check below.
     if (reader->length < 4)
     {
-        modbusmq_logf(LOG_ERROR, "response too short: %d bytes. action: discard frame\n", reader->length);
+        modbusmq_logf(LOG_ERROR, "%s response too short: %d bytes. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), reader->length);
         return -3;
     }
 
@@ -1130,8 +1139,8 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     // must never reach the data decoders as if it were a reply to the read.
     if (reader->buf[1] & 0x80)
     {
-        modbusmq_logf(LOG_ERROR, "exception response (code %d) for function 0x%02X. action: discard frame\n",
-                      reader->buf[2], writer->buf[1]);
+        modbusmq_logf(LOG_ERROR, "%s exception response (code %d) for function 0x%02X. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), reader->buf[2], writer->buf[1]);
         return -4;
     }
 
@@ -1140,11 +1149,10 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     int crc_compute = modbusmq_rtu_crc16(reader->buf, reader->length - 2);
     if (crc_res != crc_compute)
     {
-        fprintf(stderr, "modbusmq_check: CRC check failed for response\n");
-        fprintf(stderr, "modbusmq_check: req CRC != res CRC\n");
-        fprintf(stderr, "req[slave][%d] res[slave][%d]\n", writer->buf[0], reader->buf[0]);
-        fprintf(stderr, "req[func][%d]  res[func][%d]\n",  writer->buf[1], reader->buf[1]);
-        fprintf(stderr, "req[address][0x%02X]\n",          (writer->buf[2] << 8 | writer->buf[3]));
+        modbusmq_logf(LOG_ERROR, "%s CRC mismatch: computed 0x%04X, frame carries 0x%04X "
+                                 "(res slave %d function 0x%02X). action: discard frame and resync\n",
+                      modbusmq_msg_tag(context, msg), crc_compute, crc_res,
+                      reader->buf[0], reader->buf[1]);
         return -2;
     }
     

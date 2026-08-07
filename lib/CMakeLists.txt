@@ -5,7 +5,7 @@
 #
 #
 set(T modbusmq)
-project(${T} VERSION 1.1.0 DESCRIPTION "modbusmq library")
+project(${T} VERSION 2.0.0 DESCRIPTION "modbusmq library")
 
 set(SOURCES modbusmq_tcp.c modbusmq_rtu.c modbusmq.c modbusmq_time.c modbusmq_log.c modbusmq_config.c)
 
