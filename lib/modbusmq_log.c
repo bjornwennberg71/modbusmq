@@ -57,7 +57,13 @@ modbusmq_logf(int level, const char *format, ...)
     va_start(ap, format);
     vfprintf(stdout, format, ap);
     va_end(ap);
-    
 
-    
+    //
+    // stdout is fully buffered whenever it is not a terminal, which is the
+    // normal case in production: redirected to a file or piped to a log
+    // collector. A SIGTERM then drops up to a full buffer of unwritten lines —
+    // exactly the lines explaining why the process was being stopped. Flush
+    // here so a log that was written is a log that survives.
+    //
+    fflush(stdout);
 }

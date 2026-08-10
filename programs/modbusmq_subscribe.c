@@ -65,7 +65,42 @@ modbusmq_message_callback(struct modbusmq_context_t *context, modbusmq_msg_t *ms
 }
 
 //////////////////////////////////////////////////////////////////////////////
-// 
+//
+// called when the library gives up on a request
+//
+// The library has already logged the details and recovered on its own; this is
+// where an integrator hooks up whatever their system does about it — mark the
+// slave offline, raise an alarm, back off its poll interval. Everything needed
+// to tell the devices on a shared RTU bus apart is on msg.
+//
+void
+modbusmq_error_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
+{
+    const char
+        *reason = "failed";
+
+    switch(error)
+    {
+    case MODBUSMQ_ERR_TIMEOUT:
+        reason = "did not answer";
+        break;
+    case MODBUSMQ_ERR_PROTOCOL:
+        reason = "answered with a frame that was rejected";
+        break;
+    case MODBUSMQ_ERR_TRANSPORT:
+        reason = "is unreachable, the connection is gone";
+        break;
+    }
+
+    modbusmq_logf(LOG_ERROR, "slave %d (addr 0x%04X, req %u) %s\n",
+                  modbusmq_frame_slave(context, &msg->frame[0]),
+                  modbusmq_frame_addr(context, &msg->frame[0]),
+                  msg->req_id,
+                  reason);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
 // debug print channel information
 void
 modbusmq_channel_debug(modbusmq_channel_t *channel)
@@ -98,9 +133,18 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         modbusmq_channel_t
             *channel = &input->channels[c];
 
+        //
+        // Skip rather than publish: a channel outside the received data decodes
+        // as 0, and a published 0 is indistinguishable from a real reading.
+        //
+        if (modbusmq_channel_in_range(context, msg, input, channel) != 0)
+        {
+            continue;
+        }
+
         float
             f = modbusmq_read_channel(context, msg, input, channel);
-        
+
                 
         sprintf(value, "%.3f", f);
 
@@ -390,6 +434,7 @@ main(int argc, char **argv)
     //
     //modbusmq_set_message_callback(     context, &modbusmq_message_callback);
     modbusmq_set_subscription_callback(context, &modbusmq_subscription_callback);
+    modbusmq_set_error_callback(       context, &modbusmq_error_callback);
 
     //
     // mosquitto connection
@@ -552,7 +597,17 @@ main(int argc, char **argv)
                 if (modbus_pollfd_idx >= 0 && (pollfds[modbus_pollfd_idx].revents & (POLLIN | POLLOUT | POLLERR | POLLHUP)))
                 {
                     rc = modbusmq_loop_write_read(context, pollfds[modbus_pollfd_idx].revents);
-                    if (rc < 0)
+                    if (rc == MODBUSMQ_ERR_PROTOCOL)
+                    {
+                        //
+                        // A frame was rejected and the library has resynced the
+                        // stream. The connection is fine — reconnecting here
+                        // would throw away every other subscription's progress
+                        // over one bad frame. Report it and keep polling.
+                        //
+                        modbusmq_logf(LOG_ERROR, "modbusmq_loop_write_read: frame rejected, stream resynced, continuing with next request\n");
+                    }
+                    else if (rc < 0)
                     {
                         modbusmq_logf(LOG_ERROR, "modbusmq_loop_write_read: error rc=%d, err=%s. Disconnecting, will reconnect\n", rc, strerror(errno));
                         modbusmq_close(context);

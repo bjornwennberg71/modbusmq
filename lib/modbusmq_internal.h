@@ -113,6 +113,12 @@ typedef struct modbusmq_context_t
 
     int                   req_header_min;       // minimum number of bytes of header needed to compute the length
     int                   res_header_min;       // minimum number of bytes of header needed to compute the length
+
+                         // a frame was discarded, so the stream may still hold
+                         // bytes belonging to it. Drain to silence before the
+                         // next request goes out, or its response gets read
+                         // through the leftovers of the previous one.
+    int                   resync_pending;
     
                          // callback for post_message
     void                 (*message_cb)(struct modbusmq_context_t *, modbusmq_msg_t *);
@@ -120,8 +126,15 @@ typedef struct modbusmq_context_t
                          // callback for repeating subscriptions
     void                 (*subscribe_cb)(struct modbusmq_context_t *, modbusmq_msg_t *, struct modbusmq_input_t *input);
     
-                         // callback for errors
-    void                 (*error_cb)(struct modbusmq_context_t *, modbusmq_msg_t *);
+                         // callback for errors, see modbusmq_set_error_callback()
+    void                 (*error_cb)(struct modbusmq_context_t *, modbusmq_msg_t *, int error);
+
+                         // source of modbusmq_msg_t.req_id, incremented per
+                         // request. Wraps after 4 billion requests, which at
+                         // one request per millisecond is ~50 days — long
+                         // enough that a wrapped id can never be confused with
+                         // one still in flight.
+    uint32_t              req_id_next;
 
     struct modbusmq_config_t      *config;
     struct modbusmq_tcp_context_t *tcp;

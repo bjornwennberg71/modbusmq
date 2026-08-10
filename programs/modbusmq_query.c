@@ -42,11 +42,11 @@ void
 print_help(int argc, char **argv, int print_long)
 {
     printf("Usage  : %s connect-string slave-id register_type  addr naddr byte-size \n", argv[0]);
-    printf("example: %s <rtu:///dev/ttyUSB3:9600:N:8:1 | tcp://hostname:port> slave_id <%s | %s>  addr naddr <-4|-2> \n", argv[0], MODBUSMQ_TYPE_INPUT_REGISTER, MODBUSMQ_TYPE_HOLDING_REGISTER);
+    printf("example: %s <rtu:///dev/ttyUSB3:9600:1:8:N | tcp://hostname:port> slave_id <%s | %s>  addr naddr <-4|-2> \n", argv[0], MODBUSMQ_TYPE_INPUT_REGISTER, MODBUSMQ_TYPE_HOLDING_REGISTER);
 
     if (print_long)
     {
-        printf("rtu      :              rtu://[device]:[baud-rate]:1:8:N  RTU connect string \n");
+        printf("rtu      :              rtu://[device]:[baudrate]:[stopbit]:[databits]:[parity]  RTU connect string \n");
         printf("tcp      :              tcp://hostname:port TCP connect string \n");
         printf("slave-id :              slave-id to communicate to \n");
         printf("read_input_registers  : Read one or more input registers from address \n");

@@ -54,6 +54,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <termios.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 
 
@@ -163,12 +164,50 @@ modbusmq_rtu_free(modbusmq_context_t *context)
 
 
 //////////////////////////////////////////////////////////////////////////////
-// 
+//
+// Length of the inter-frame silence that delimits RTU frames, in microseconds.
+//
+// Modbus RTU has no framing bytes: a frame ends when the line has been quiet
+// for 3.5 character times. Above 19200 baud the spec fixes that period at
+// 1.750 ms instead of deriving it from the baud rate, so use whichever is
+// longer.
+//
+static uint64_t
+modbusmq_rtu_quiet_us(modbusmq_context_t *context)
+{
+    uint64_t
+        quiet_us = (context->rtu->onebyte_delay_us * 7) / 2; // 3.5 char times
+
+    if (quiet_us < MODBUSMQ_RTU_QUIET_MIN_US)
+    {
+        quiet_us = MODBUSMQ_RTU_QUIET_MIN_US;
+    }
+
+    return quiet_us;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Drain the receive buffer until the line has gone quiet.
+//
+// A plain non-blocking read-until-EAGAIN loop is a race, not a resync: it
+// discards the bytes that happen to have arrived already and leaves whatever
+// is still in flight on the wire to be picked up as the head of the next
+// frame. One stray byte then offsets every following read, and nothing ever
+// re-derives the frame boundary.
+//
+// So instead of draining once, keep draining until nothing arrives for a full
+// inter-frame silence period — at that point the sender has finished and the
+// stream is aligned on a real frame boundary again. This deliberately costs
+// wall-clock time (up to one max-size frame plus the quiet period); the caller
+// pays that delay once, reports the error, and the next request in the
+// pipeline starts from a known-clean stream.
+//
+// @return number of bytes discarded, or < 0 on error
 //
 int
 modbusmq_rtu_flush(modbusmq_context_t *context)
 {
-//    printf("modbusmq_rtu_flush START\n");
     if (!context)
     {
         errno = EINVAL;
@@ -176,23 +215,86 @@ modbusmq_rtu_flush(modbusmq_context_t *context)
         return -1;
     }
 
-    char
-        c;
-    int
-        rc = 0;
-
-    int ntotal = 0;
-    
-    while(rc = read(context->fd, &c, 1) > 0)
+    if (context->fd <= 0)
     {
-        ntotal++;
+        return 0;
     }
 
-    // if (ntotal)
-    // {
-    //     printf("modbusmq_rtu: flushed %d bytes\n", ntotal);
-    // }
-    
+    uint64_t
+        quiet_us = modbusmq_rtu_quiet_us(context);
+    int
+        quiet_ms = (int)((quiet_us + 999) / 1000); // poll() granularity is ms
+
+    if (quiet_ms < 1)
+    {
+        quiet_ms = 1;
+    }
+
+    //
+    // Worst case we are draining a full max-size frame that started one byte
+    // before we gave up on it, so allow that much time plus a few quiet
+    // periods before concluding the line is simply never going idle.
+    //
+    millitime_t
+        max_drain_ms = (millitime_t)((MODBUSMQ_FRAME_MAX * context->rtu->onebyte_delay_us) / 1000)
+                     + 4 * quiet_ms
+                     + 10;
+    millitime_t
+        deadline_ms = millitime() + max_drain_ms;
+
+    uint8_t
+        drain_buf[64];
+    int
+        ntotal = 0;
+
+    for (;;)
+    {
+        struct pollfd
+            pfd = { .fd = context->fd, .events = POLLIN, .revents = 0 };
+
+        int
+            rc = poll(&pfd, 1, quiet_ms);
+
+        if (rc < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            modbusmq_logf(LOG_ERROR, "rtu_flush: poll failed: %s\n", strerror(errno));
+            return -1;
+        }
+
+        if (rc == 0)
+        {
+            // line has been quiet for a full inter-frame gap: we are aligned
+            break;
+        }
+
+        rc = read(context->fd, drain_buf, sizeof(drain_buf));
+        if (rc > 0)
+        {
+            ntotal += rc;
+        }
+        else if (rc < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+        {
+            modbusmq_logf(LOG_ERROR, "rtu_flush: read failed: %s\n", strerror(errno));
+            return -1;
+        }
+
+        if (millitime() >= deadline_ms)
+        {
+            modbusmq_logf(LOG_ERROR, "rtu_flush: line still busy after %d ms, discarded %d bytes and giving up on resync\n",
+                          (int)max_drain_ms, ntotal);
+            break;
+        }
+    }
+
+    if (ntotal > 0)
+    {
+        modbusmq_logf(LOG_INFO, "rtu_flush: discarded %d stale bytes, stream resynced\n", ntotal);
+    }
+
     return ntotal;
 }
 
@@ -848,7 +950,40 @@ modbusmq_rtu_write_mask_registers( struct modbusmq_context_t *context, modbusmq_
 
 
 //////////////////////////////////////////////////////////////////////////////
-// 
+//
+// How many payload bytes the response to this request must carry.
+//
+// Derived from the request, not from the response, so that a reply belonging
+// to some other request cannot silently redefine our read window. Bit reads
+// pack 8 values per byte, register reads use 2 bytes per register.
+//
+// @return expected value of res[2] (the byte count), or < 0 when the function
+//         has no byte-count field
+//
+static int
+modbusmq_rtu_expected_nbytes(modbusmq_context_t *context, modbusmq_frame_t *writer)
+{
+    int
+        naddr = modbusmq_rtu_frame_naddr(context, writer);
+
+    switch (modbusmq_rtu_frame_function(context, writer))
+    {
+    case MODBUSMQ_READ_COILS:
+    case MODBUSMQ_READ_DISCRETE_INPUTS:
+        return (naddr + 7) / 8;
+
+    case MODBUSMQ_READ_HOLDING_REGISTERS:
+    case MODBUSMQ_READ_INPUT_REGISTERS:
+        return naddr * 2;
+
+    default:
+        // write functions echo fixed-size fields instead of a byte count
+        return -1;
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
 // check partial res header
 int
 modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
@@ -867,7 +1002,7 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     {
         return 1;
     }
-    
+
     // check if slave is correct
     if (reader->xmit >= 1 && writer->buf[0] == reader->buf[0])
     {
@@ -875,8 +1010,9 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "slave id different req[%d] != res[%d]. action: discard frame\n", writer->buf[0], reader->buf[0]);
-        return -2; 
+        modbusmq_logf(LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), writer->buf[0], reader->buf[0]);
+        return -2;
     }
 
     // check function
@@ -890,40 +1026,72 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         // exception_code(1) + CRC(2) = 5 bytes total, always. buf[2] here
         // is the exception code, not a byte count — don't run it through
         // the normal length formula below.
-        if (reader->xmit >= 3)
-        {
-            modbusmq_logf(LOG_ERROR, "device returned Modbus exception code %d for function 0x%02X\n", reader->buf[2], writer->buf[1]);
-        }
+        //
+        // This runs again on every read that advances the frame, so log only
+        // on the pass that first shortens it — otherwise one exception reply
+        // reports itself once per chunk that arrives.
+        //
         if (reader->length != 5)
         {
+            if (reader->xmit >= 3)
+            {
+                modbusmq_logf(LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X\n",
+                              modbusmq_msg_tag(context, msg), reader->buf[2], writer->buf[1]);
+            }
             reader->length = 5;
         }
         return reader->length - reader->xmit;
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "function is different req[%02X] != res[%02X]. action: discard frame\n", writer->buf[1], reader->buf[1]);
+        modbusmq_logf(LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), writer->buf[1], reader->buf[1]);
         return -3;
     }
 
-    // check length
-    if (reader->xmit >= 3)
+    //
+    // Establish how long this frame is.
+    //
+    // RTU carries no transaction id, so slave id and function alone cannot
+    // tell "the answer to my request" apart from "the answer to some earlier
+    // request to the same slave for the same function" — which is exactly what
+    // is left on the wire after a request has timed out. The byte count is the
+    // one remaining discriminator, so require it to match what the request
+    // asked for instead of trusting it to redefine our read window.
+    //
+    int
+        expected_nbytes = modbusmq_rtu_expected_nbytes(context, writer);
+    int
+        newlen;
+
+    if (expected_nbytes < 0)
     {
-        int newlen = reader->buf[2] + context->header_length + 2;
-
-        // check and ajust res_length
-        if (newlen != reader->length)
-        {
-            // this is normal. we first read 3 bytes to get the header and then we know how long the frame is
-
-            // modbusmq_logf(LOG_INFO, "short frame received: %d bytes, expected %d bytes\n", newlen, reader->length);
-            // CRC check will be performed when complete frame has been received and either discard or allow this frame
-            reader->length = newlen;
-
-            //fprintf(stderr, "BEFORE reader->length=%d\n", reader->length);
-            return reader->length - reader->xmit;
-        }
+        // write functions: slave(1) + function(1) + addr(2) + value(2) + CRC(2)
+        newlen = 8;
     }
+    else if (reader->buf[2] != expected_nbytes)
+    {
+        modbusmq_logf(LOG_ERROR, "%s byte count mismatch for function 0x%02X: "
+                                 "requested %d bytes, response declares %d. "
+                                 "action: discard frame and resync\n",
+                      modbusmq_msg_tag(context, msg), writer->buf[1],
+                      expected_nbytes, reader->buf[2]);
+        return -4;
+    }
+    else
+    {
+        newlen = expected_nbytes + context->header_length + 2;
+    }
+
+    if (newlen < 0 || newlen > MODBUSMQ_FRAME_MAX)
+    {
+        modbusmq_logf(LOG_ERROR, "%s invalid frame length %d. action: discard frame and resync\n",
+                      modbusmq_msg_tag(context, msg), newlen);
+        return -5;
+    }
+
+    // first read is 3 bytes to get the header, then we know how long the frame is
+    reader->length = newlen;
 
     return reader->length - reader->xmit;
 }
@@ -958,16 +1126,33 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
         return 2;
     }
 
+    // A complete frame is at least slave(1) + function(1) + CRC(2). Anything
+    // shorter would index behind buf[] on the CRC check below.
+    if (reader->length < 4)
+    {
+        modbusmq_logf(LOG_ERROR, "%s response too short: %d bytes. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), reader->length);
+        return -3;
+    }
+
+    // An exception response is a valid frame carrying no register data, so it
+    // must never reach the data decoders as if it were a reply to the read.
+    if (reader->buf[1] & 0x80)
+    {
+        modbusmq_logf(LOG_ERROR, "%s exception response (code %d) for function 0x%02X. action: discard frame\n",
+                      modbusmq_msg_tag(context, msg), reader->buf[2], writer->buf[1]);
+        return -4;
+    }
+
     // crc occupies 2 bytes
     int crc_res     = reader->buf[reader->length-1] << 8 | reader->buf[reader->length-2];
     int crc_compute = modbusmq_rtu_crc16(reader->buf, reader->length - 2);
     if (crc_res != crc_compute)
     {
-        fprintf(stderr, "modbusmq_check: CRC check failed for response\n");
-        fprintf(stderr, "modbusmq_check: req CRC != res CRC\n");
-        fprintf(stderr, "req[slave][%d] res[slave][%d]\n", writer->buf[0], reader->buf[0]);
-        fprintf(stderr, "req[func][%d]  res[func][%d]\n",  writer->buf[1], reader->buf[1]);
-        fprintf(stderr, "req[address][0x%02X]\n",          (writer->buf[2] << 8 | writer->buf[3]));
+        modbusmq_logf(LOG_ERROR, "%s CRC mismatch: computed 0x%04X, frame carries 0x%04X "
+                                 "(res slave %d function 0x%02X). action: discard frame and resync\n",
+                      modbusmq_msg_tag(context, msg), crc_compute, crc_res,
+                      reader->buf[0], reader->buf[1]);
         return -2;
     }
     
