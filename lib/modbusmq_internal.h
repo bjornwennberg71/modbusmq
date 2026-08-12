@@ -25,6 +25,12 @@
 
 #define MODBUSMQ_BROADCAST_ADDRESS 0
 
+// number of abandoned (timed out or rejected) requests whose transaction id
+// is remembered, so a late reply for one of them is recognized instead of
+// mistaken for corruption. A handful is enough: the frame timeout forces a
+// full resync long before more than a few requests could be outstanding.
+#define MODBUSMQ_ORPHAN_MAX 4
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -119,7 +125,23 @@ typedef struct modbusmq_context_t
                          // next request goes out, or its response gets read
                          // through the leftovers of the previous one.
     int                   resync_pending;
-    
+
+                         // transaction ids (tcp only) of requests already given
+                         // up on, whose real response may still be in flight
+    uint16_t              orphan_tid[MODBUSMQ_ORPHAN_MAX];
+
+                         // number of ids ever recorded in orphan_tid, used
+                         // modulo MODBUSMQ_ORPHAN_MAX as the next slot to fill.
+                         // uint32_t so wraparound stays well-defined instead of
+                         // producing a negative array index.
+    uint32_t              orphan_tid_count;
+
+                         // reader currently holds bytes belonging to a
+                         // recognized orphan rather than to the message it was
+                         // armed for; set by modbusmq_orphan_take() and cleared
+                         // once that stale frame has been fully drained.
+    int                   reader_orphan_draining;
+
                          // callback for post_message
     void                 (*message_cb)(struct modbusmq_context_t *, modbusmq_msg_t *);
     
