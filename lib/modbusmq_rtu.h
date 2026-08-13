@@ -51,7 +51,7 @@ extern int  modbusmq_rtu_msg_check_header         (modbusmq_context_t *context, 
 
 extern int  modbusmq_rtu_flush                    (modbusmq_context_t *context);
 
-extern uint16_t modbusmq_rtu_crc16                (const uint8_t *buf, int buflen);
+extern int  modbusmq_rtu_frame_drain              (modbusmq_context_t *context, modbusmq_frame_t *frame);
 
 extern int      modbusmq_rtu_frame_slave          (modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int      modbusmq_rtu_frame_function       (modbusmq_context_t *context, modbusmq_frame_t *frame);

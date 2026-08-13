@@ -2058,95 +2058,38 @@ modbusmq_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
 /**
  *
- * @brief Remember a request's identity as abandoned.
+ * @brief Size and validate a frame from its own bytes.
  *
- * Called whenever a request is given up on — a frame timeout, or its
- * response rejected as unrecognizable — while the real response may still
- * be in flight. A later arrival matching this identity is then recognized
- * by modbusmq_orphan_take() as that stale reply instead of being mistaken
- * for corruption, which otherwise flushes the whole receive buffer and
- * takes the next request's real response down with it. See
- * modbusmq_orphan_identity() for what "identity" means per transport.
+ * Called when a response fails to match the request it was read for. Such a
+ * frame is either a reply to a request already given up on, whose real answer
+ * was merely late rather than lost, or genuine corruption — and the two are
+ * told apart by asking whether the bytes form a complete, well-formed frame
+ * on their own terms: the MBAP length field on tcp, the declared byte count
+ * plus CRC on rtu. Neither transport needs to be told which requests are
+ * outstanding to answer that.
  *
- * @param context: allocated context
- * @param identity: identity of the abandoned request, or < 0 to ignore
- */
-static void
-modbusmq_orphan_remember(modbusmq_context_t *context, int identity)
-{
-    if (!context || identity < 0)
-    {
-        return;
-    }
-
-    context->orphan_tid[context->orphan_tid_count % MODBUSMQ_ORPHAN_MAX] = (uint16_t)identity;
-    context->orphan_tid_count++;
-}
-
-/**
- *
- * @brief Check whether an identity belongs to a request already given up on.
- *
- * Consumes the match on success so the same slot cannot later be mistaken
- * for a different frame. A handful of entries is enough: the frame timeout
- * forces a full resync long before more than a few requests could be
- * outstanding-but-abandoned at once.
+ * On a partial frame the reader's length is narrowed to the frame's own, so
+ * the following reads stop on its boundary instead of on the boundary the
+ * current request expected. The frame timeout remains the backstop for a
+ * frame whose remainder never arrives.
  *
  * @param context: allocated context
- * @param identity: identity read from an incoming frame, or < 0
+ * @param frame: reader frame holding the unmatched bytes
  *
- * @return 1 if recognized, 0 otherwise
+ * @return 1 when a whole valid frame has been read and can be discarded
+ *         0 when more bytes are needed; frame->length sized to this frame
+ *        < 0 when the bytes do not form a frame, so the stream is corrupt
  */
-static int
-modbusmq_orphan_take(modbusmq_context_t *context, int identity)
+int
+modbusmq_frame_drain(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
-    if (!context || identity < 0)
+    if (!context || !frame)
     {
-        return 0;
+        errno = EINVAL;
+        return -1;
     }
 
-    uint32_t count = MODBUSMQ_MIN(context->orphan_tid_count, (uint32_t)MODBUSMQ_ORPHAN_MAX);
-    for (uint32_t i = 0; i < count; ++i)
-    {
-        if (context->orphan_tid[i] == (uint16_t)identity)
-        {
-            context->orphan_tid[i] = 0xffffu; // never a real tcp id (wraps modulo 0xffff) or rtu slave id (max 247)
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-/**
- *
- * @brief What identifies a request/response pair for orphan tracking, per transport.
- *
- * TCP has a 16-bit transaction id for exactly this purpose. RTU has none —
- * the slave id is the only per-request discriminator available cheaply at
- * the point a header mismatch is detected (function code and byte count are
- * checked afterward, by the caller, once enough bytes have arrived).
- *
- * @param context: allocated context
- * @param frame: writer frame (to remember an outgoing request) or reader
- *               frame (to identify an incoming one); needs at least 2 bytes
- *               for tcp or 1 byte for rtu to be meaningful
- *
- * @return identity, or < 0 if not yet available / transport has none
- */
-static int
-modbusmq_orphan_identity(modbusmq_context_t *context, modbusmq_frame_t *frame)
-{
-    if (context->tcp)
-    {
-        return (frame->xmit >= 2) ? modbusmq_frame_transaction_id(context, frame) : -1;
-    }
-    else if (context->rtu)
-    {
-        return (frame->xmit >= 1) ? frame->buf[0] : -1;
-    }
-
-    return -1;
+    return context->cb.modbusmq_frame_drain(context, frame);
 }
 
 /**
@@ -2211,7 +2154,6 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
                 }
                 memset(reader, 0, sizeof(*reader));
                 reader->length = context->header_length;
-                context->reader_orphan_draining = 0;
                 //printf("writer->length = %d, setting reader->length = %d\n", writer->length, reader->length);
             }
             else
@@ -2244,143 +2186,65 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
             if (modbusmq_check_header(context, msg) < 0)
             {
                 //
-                // A late reply for a request we already gave up on looks
-                // exactly like this: a well-formed frame that identifies as
-                // someone else's (wrong transaction id on tcp, wrong slave id
-                // on rtu). If we recognize the identity (or are already
-                // mid-drain of one recognized on an earlier, partial read of
-                // these same bytes), drain exactly that frame's own bytes —
-                // using its self-declared length — and keep waiting for the
-                // current message's real answer, instead of flushing the
-                // whole receive buffer and dropping this message too. That
-                // flush-and-drop is what turns one late response into a
-                // permanent one-behind desync: the current message's own
-                // real answer, if it is already queued up right behind the
-                // stale one, gets discarded along with it.
+                // A late reply to a request already given up on looks exactly
+                // like this: a well-formed frame that identifies as someone
+                // else's (wrong transaction id on tcp, wrong slave, function
+                // or byte count on rtu). Ask the transport to size and check
+                // the frame against its own bytes; one that holds up is a real
+                // frame that simply is not ours, so step over exactly its own
+                // bytes and keep waiting for the answer to this request.
                 //
-                if (!context->reader_orphan_draining)
+                // Flushing the whole receive buffer here instead is what turns
+                // one late response into a permanent one-behind desync: at a
+                // steady polling cadence this message's own real answer is
+                // often already queued right behind the stale one, so the
+                // flush discards it too and hands the backlog forward for
+                // good.
+                //
+                rc = modbusmq_frame_drain(context, reader);
+
+                if (rc > 0)
                 {
-                    context->reader_orphan_draining = modbusmq_orphan_take(context, modbusmq_orphan_identity(context, reader));
-                }
-
-                // captured before any clearing below, so the give-up check at the
-                // bottom can still tell "never was an orphan" apart from "was one,
-                // and this call is the one that finished draining it successfully"
-                int
-                    was_orphan          = context->reader_orphan_draining,
-                    drain_confirmed_bad = 0;
-
-                if (was_orphan)
-                {
-                    if (context->tcp && reader->xmit >= 6)
-                    {
-                        int
-                            body_length  = (reader->buf[4] << 8) | reader->buf[5],
-                            frame_length = body_length + 6;
-
-                        if (frame_length > 6 && frame_length <= MODBUSMQ_FRAME_MAX)
-                        {
-                            reader->length = frame_length;
-                        }
-                    }
-                    else if (context->rtu && reader->xmit >= 2)
-                    {
-                        //
-                        // Derived from the orphan's OWN function code, not the
-                        // current request's — it may be a different function
-                        // entirely, so modbusmq_rtu_expected_nbytes() (which
-                        // trusts the current writer) does not apply here.
-                        //
-                        int
-                            function      = reader->buf[1],
-                            is_exception  = (function & 0x80) != 0,
-                            is_read       = !is_exception &&
-                                            (function == MODBUSMQ_READ_COILS || function == MODBUSMQ_READ_DISCRETE_INPUTS ||
-                                             function == MODBUSMQ_READ_HOLDING_REGISTERS || function == MODBUSMQ_READ_INPUT_REGISTERS);
-
-                        if (is_exception)
-                        {
-                            // slave(1) + function|0x80(1) + code(1) + crc(2)
-                            reader->length = 5;
-                        }
-                        else if (is_read)
-                        {
-                            if (reader->xmit >= 3)
-                            {
-                                // header(3, includes its own byte count) + data + crc(2)
-                                int
-                                    frame_length = context->header_length + reader->buf[2] + 2;
-
-                                if (frame_length > 0 && frame_length <= MODBUSMQ_FRAME_MAX)
-                                {
-                                    reader->length = frame_length;
-                                }
-                            }
-                            // else: byte count not arrived yet, leave reader->length as-is
-                        }
-                        else
-                        {
-                            // write-function echo: slave + function + addr(2) + value(2) + crc(2)
-                            reader->length = 8;
-                        }
-                    }
-
-                    if (reader->xmit >= reader->length && reader->length > 0)
-                    {
-                        //
-                        // RTU's slave id space is small enough (a handful of
-                        // devices sharing a bus) that a coincidental match
-                        // against modbusmq_orphan_take() is far likelier than
-                        // tcp's 65534-value transaction id, so confirm with
-                        // the frame's own CRC before trusting the drain — a
-                        // real stale frame still has to pass it, noise won't.
-                        //
-                        if (context->rtu)
-                        {
-                            int
-                                crc_res     = reader->buf[reader->length - 1] << 8 | reader->buf[reader->length - 2],
-                                crc_compute = modbusmq_rtu_crc16(reader->buf, reader->length - 2);
-
-                            drain_confirmed_bad = (crc_res != crc_compute);
-                        }
-
-                        if (!drain_confirmed_bad)
-                        {
-                            // orphan fully drained; go back to waiting for the real answer
-                            memset(reader, 0, sizeof(*reader));
-                            reader->length = context->header_length;
-                            context->reader_orphan_draining = 0;
-                        }
-                    }
-                }
-
-                if (!was_orphan || drain_confirmed_bad)
-                {
-                    if (modbusmq_debug >= 1)
-                    {
-                        modbusmq_frame_debug(context, reader);
-                    }
-
-                    //
-                    // Not a recognized orphan, or it looked like one but its CRC
-                    // didn't check out: treat as real corruption and give up on
-                    // this message too. Remember its identity first, so that if
-                    // this message's own real answer was merely late rather than
-                    // lost, it gets the lenient treatment above next time instead
-                    // of cascading further.
-                    //
-                    modbusmq_orphan_remember(context, modbusmq_orphan_identity(context, writer));
-
-                    context->err++;
-                    modbusmq_flush(context);
-                    context->resync_pending = 1;
-
+                    // stale frame stepped over; wait for this request's own answer
                     memset(reader, 0, sizeof(*reader));
                     reader->length = context->header_length;
-                    context->reader_orphan_draining = 0;
-
-                    return MODBUSMQ_ERR_PROTOCOL;
                 }
+
+                if (rc >= 0)
+                {
+                    //
+                    // Either the frame is stepped over, or only part of it has
+                    // arrived and reader->length now describes that frame
+                    // rather than the one we asked for, so the following reads
+                    // stop on its boundary. Both leave a reader waiting on
+                    // bytes, which the accounting at the end of this function
+                    // reports as work still pending; the frame timeout in
+                    // modbusmq_loop_prepare() covers a remainder that never
+                    // comes.
+                    //
+                    rc = 0;
+
+                    goto pending;
+                }
+
+                if (modbusmq_debug >= 1)
+                {
+                    modbusmq_frame_debug(context, reader);
+                }
+
+                //
+                // The bytes do not form a frame at all, so the stream itself is
+                // out of step and there is no boundary to step over. Drain to
+                // silence and give up on this message.
+                //
+                context->err++;
+                modbusmq_flush(context);
+                context->resync_pending = 1;
+
+                memset(reader, 0, sizeof(*reader));
+                reader->length = context->header_length;
+
+                return MODBUSMQ_ERR_PROTOCOL;
             }
 
             if (reader->xmit == reader->length)
@@ -2404,6 +2268,8 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
     {
         return rc;
     }
+
+pending:
 
     // return number of bytes pending to write+read
     rc =
@@ -2534,18 +2400,6 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
                       rc);
 
         context->err++;
-
-        //
-        // Remember this request's own identity as abandoned before giving up
-        // on it, so a merely-late (not lost) real answer is recognized and
-        // drained cleanly next time instead of triggering another cascade.
-        //
-        {
-            modbusmq_frame_t
-                *writer = wrapper->msg.frame[0].is_writer ? &wrapper->msg.frame[0] : &wrapper->msg.frame[1];
-
-            modbusmq_orphan_remember(context, modbusmq_orphan_identity(context, writer));
-        }
 
         // drain what is on the wire now, and again before the next request in
         // case the frame we gave up on is still on its way
@@ -2752,15 +2606,6 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
                 modbusmq_frame_debug(context, &wrapper->msg.frame[1]);
             }
 
-            //
-            // Remember this request's identity before freeing it, so that if
-            // the response was merely late rather than lost,
-            // modbusmq_handle_write_read() recognizes it and drains just that
-            // frame instead of flushing the whole receive buffer and taking
-            // the next request's real response down with it.
-            //
-            modbusmq_orphan_remember(context, modbusmq_orphan_identity(context, head_writer));
-
             context->msg_wrapper_head = context->msg_wrapper_head->next;
             free(wrapper);
             wrapper = NULL;
@@ -2777,9 +2622,12 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
             // into an empty buffer and gets read as the answer to whichever
             // request follows, shifting request/response pairing by one for
             // good. Every frame then still passes slave, function and CRC
-            // checks while carrying another block's registers. The orphan
-            // tracking above is the actual fix for that; this flush/resync
-            // remains as a backstop for whatever it does not catch.
+            // checks while carrying another block's registers.
+            //
+            // A late frame that slips past both drains is caught on arrival
+            // instead: it fails the header check against whichever request is
+            // then outstanding, and modbusmq_frame_drain() steps over it
+            // without disturbing that request.
             //
             modbusmq_flush(context);
             context->resync_pending = 1;

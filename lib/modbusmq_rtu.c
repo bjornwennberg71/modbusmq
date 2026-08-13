@@ -98,6 +98,7 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
         .modbusmq_frame_data       = modbusmq_rtu_frame_data,
         .modbusmq_msg_check        = modbusmq_rtu_msg_check,
         .modbusmq_msg_check_header = modbusmq_rtu_msg_check_header,
+        .modbusmq_frame_drain      = modbusmq_rtu_frame_drain,
 
         .modbusmq_read_coil_bits         = modbusmq_rtu_read_coil_bits,
         .modbusmq_read_input_bits        = modbusmq_rtu_read_input_bits,
@@ -1094,6 +1095,92 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     reader->length = newlen;
 
     return reader->length - reader->xmit;
+}
+
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Identify a frame from its own bytes rather than from the request it was
+// checked against, so a reply that belongs to an earlier request can be
+// stepped over instead of taken for corruption.
+//
+// Unlike modbusmq_rtu_msg_check_header(), which deliberately validates the
+// declared byte count against what the current request asked for, this reads
+// the frame on its own terms: the function code is whatever the frame says,
+// which for a stale reply may be a different function entirely.
+//
+// RTU carries no transaction id, so a slave/function match proves nothing about
+// which request a frame answers. The CRC is what makes the drain safe: a real
+// frame -- stale or not -- passes it, and noise does not.
+//
+int
+modbusmq_rtu_frame_drain(modbusmq_context_t *context, modbusmq_frame_t *frame)
+{
+    if (!context || !frame)
+    {
+        return -1;
+    }
+
+    // slave + function is the least that identifies anything
+    if (frame->xmit < 2)
+    {
+        return 0;
+    }
+
+    int
+        function = frame->buf[1],
+        length;
+
+    if (function & 0x80)
+    {
+        // exception: slave(1) + function|0x80(1) + code(1) + crc(2)
+        length = 5;
+    }
+    else if (function == MODBUSMQ_READ_COILS || function == MODBUSMQ_READ_DISCRETE_INPUTS ||
+             function == MODBUSMQ_READ_HOLDING_REGISTERS || function == MODBUSMQ_READ_INPUT_REGISTERS)
+    {
+        // the byte count is the third byte, so wait for it before sizing
+        if (frame->xmit < 3)
+        {
+            return 0;
+        }
+
+        // header(3, includes the byte count) + data + crc(2)
+        length = context->header_length + frame->buf[2] + 2;
+    }
+    else
+    {
+        // write-function echo: slave + function + addr(2) + value(2) + crc(2)
+        length = 8;
+    }
+
+    //
+    // A frame shorter than what has already been read would leave the leading
+    // bytes of the next one consumed, so treat an unusable length as noise
+    // rather than trusting it.
+    //
+    if (length < 4 || length > MODBUSMQ_FRAME_MAX || length < frame->xmit)
+    {
+        return -1;
+    }
+
+    if (frame->xmit < length)
+    {
+        // size the read window to this frame and wait for the rest of it
+        frame->length = length;
+        return 0;
+    }
+
+    int
+        crc_res     = frame->buf[length - 1] << 8 | frame->buf[length - 2],
+        crc_compute = modbusmq_rtu_crc16(frame->buf, length - 2);
+
+    if (crc_res != crc_compute)
+    {
+        return -1;
+    }
+
+    return 1;
 }
 
 
