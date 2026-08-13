@@ -2057,9 +2057,45 @@ modbusmq_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
 
 /**
- * 
+ *
+ * @brief Size and validate a frame from its own bytes.
+ *
+ * Called when a response fails to match the request it was read for. Such a
+ * frame is either a reply to a request already given up on, whose real answer
+ * was merely late rather than lost, or genuine corruption — and the two are
+ * told apart by asking whether the bytes form a complete, well-formed frame
+ * on their own terms: the MBAP length field on tcp, the declared byte count
+ * plus CRC on rtu. Neither transport needs to be told which requests are
+ * outstanding to answer that.
+ *
+ * On a partial frame the reader's length is narrowed to the frame's own, so
+ * the following reads stop on its boundary instead of on the boundary the
+ * current request expected. The frame timeout remains the backstop for a
+ * frame whose remainder never arrives.
+ *
+ * @param context: allocated context
+ * @param frame: reader frame holding the unmatched bytes
+ *
+ * @return 1 when a whole valid frame has been read and can be discarded
+ *         0 when more bytes are needed; frame->length sized to this frame
+ *        < 0 when the bytes do not form a frame, so the stream is corrupt
+ */
+int
+modbusmq_frame_drain(modbusmq_context_t *context, modbusmq_frame_t *frame)
+{
+    if (!context || !frame)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return context->cb.modbusmq_frame_drain(context, frame);
+}
+
+/**
+ *
  * @brief Handle write/read processing for a single Modbusmq message.
- * 
+ *
  * Given a message and a set of poll() revents, this function advances the
  * state of the associated request/response frames: it writes pending data,
  * reads response data when available, and invokes callbacks when a full
@@ -2149,16 +2185,57 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
             // Ensure what we have read matches what we requested
             if (modbusmq_check_header(context, msg) < 0)
             {
+                //
+                // A late reply to a request already given up on looks exactly
+                // like this: a well-formed frame that identifies as someone
+                // else's (wrong transaction id on tcp, wrong slave, function
+                // or byte count on rtu). Ask the transport to size and check
+                // the frame against its own bytes; one that holds up is a real
+                // frame that simply is not ours, so step over exactly its own
+                // bytes and keep waiting for the answer to this request.
+                //
+                // Flushing the whole receive buffer here instead is what turns
+                // one late response into a permanent one-behind desync: at a
+                // steady polling cadence this message's own real answer is
+                // often already queued right behind the stale one, so the
+                // flush discards it too and hands the backlog forward for
+                // good.
+                //
+                rc = modbusmq_frame_drain(context, reader);
+
+                if (rc > 0)
+                {
+                    // stale frame stepped over; wait for this request's own answer
+                    memset(reader, 0, sizeof(*reader));
+                    reader->length = context->header_length;
+                }
+
+                if (rc >= 0)
+                {
+                    //
+                    // Either the frame is stepped over, or only part of it has
+                    // arrived and reader->length now describes that frame
+                    // rather than the one we asked for, so the following reads
+                    // stop on its boundary. Both leave a reader waiting on
+                    // bytes, which the accounting at the end of this function
+                    // reports as work still pending; the frame timeout in
+                    // modbusmq_loop_prepare() covers a remainder that never
+                    // comes.
+                    //
+                    rc = 0;
+
+                    goto pending;
+                }
+
                 if (modbusmq_debug >= 1)
                 {
                     modbusmq_frame_debug(context, reader);
                 }
 
                 //
-                // These bytes are not the answer to this request. Drain to the
-                // next frame boundary and give up on this message rather than
-                // waiting for the rest of a frame we have already rejected to
-                // trickle into a read window that no longer lines up with it.
+                // The bytes do not form a frame at all, so the stream itself is
+                // out of step and there is no boundary to step over. Drain to
+                // silence and give up on this message.
                 //
                 context->err++;
                 modbusmq_flush(context);
@@ -2191,6 +2268,8 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
     {
         return rc;
     }
+
+pending:
 
     // return number of bytes pending to write+read
     rc =
@@ -2526,7 +2605,7 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
                 modbusmq_frame_debug(context, &wrapper->msg.frame[0]);
                 modbusmq_frame_debug(context, &wrapper->msg.frame[1]);
             }
-            
+
             context->msg_wrapper_head = context->msg_wrapper_head->next;
             free(wrapper);
             wrapper = NULL;
@@ -2544,6 +2623,11 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
             // request follows, shifting request/response pairing by one for
             // good. Every frame then still passes slave, function and CRC
             // checks while carrying another block's registers.
+            //
+            // A late frame that slips past both drains is caught on arrival
+            // instead: it fails the header check against whichever request is
+            // then outstanding, and modbusmq_frame_drain() steps over it
+            // without disturbing that request.
             //
             modbusmq_flush(context);
             context->resync_pending = 1;

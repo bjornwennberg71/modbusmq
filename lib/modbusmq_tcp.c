@@ -106,6 +106,7 @@ modbusmq_tcp_context(const char *pzConnectString)
         .modbusmq_msg_prepare      = modbusmq_tcp_msg_prepare,
         .modbusmq_msg_check        = modbusmq_tcp_msg_check,
         .modbusmq_msg_check_header = modbusmq_tcp_msg_check_header,
+        .modbusmq_frame_drain      = modbusmq_tcp_frame_drain,
 
         .modbusmq_frame_init       = modbusmq_tcp_frame_init,
         .modbusmq_frame_slave      = modbusmq_tcp_frame_slave,
@@ -770,7 +771,59 @@ modbusmq_tcp_write_mask_registers( struct modbusmq_context_t *context, modbusmq_
 }
 
 //////////////////////////////////////////////////////////////////////////////
-// 
+//
+// Identify a frame from its own bytes rather than from the request it was
+// checked against, so a reply that belongs to an earlier request can be
+// stepped over instead of taken for corruption.
+//
+// The MBAP header carries its own length, so a tcp frame always says how long
+// it is; there is no equivalent of RTU's CRC to check it against, and none is
+// needed -- tcp delivers a byte stream in order, so a header that parses is a
+// header that was really sent.
+//
+int
+modbusmq_tcp_frame_drain(modbusmq_context_t *context, modbusmq_frame_t *frame)
+{
+    if (!context || !frame)
+    {
+        return -1;
+    }
+
+    // the length field occupies bytes 4 and 5
+    if (frame->xmit < 6)
+    {
+        return 0;
+    }
+
+    //
+    // The declared length counts everything after itself, so the frame runs to
+    // that many bytes past the 6-byte transaction/protocol/length prefix.
+    //
+    int
+        length = ((frame->buf[4] << 8) | frame->buf[5]) + 6;
+
+    //
+    // A frame shorter than what has already been read would leave the leading
+    // bytes of the next one consumed, so treat an unusable length as a stream
+    // that cannot be trusted rather than sizing a read window from it.
+    //
+    if (length <= 6 || length > MODBUSMQ_FRAME_MAX || length < frame->xmit)
+    {
+        return -1;
+    }
+
+    if (frame->xmit < length)
+    {
+        // size the read window to this frame and wait for the rest of it
+        frame->length = length;
+        return 0;
+    }
+
+    return 1;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
 // check partial received header
 int
 modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)

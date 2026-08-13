@@ -70,6 +70,12 @@ typedef struct modbusmq_cb_t
     int       (*modbusmq_msg_check)       (struct modbusmq_context_t *context, modbusmq_msg_t *msg);
     int       (*modbusmq_msg_check_header)(struct modbusmq_context_t *context, modbusmq_msg_t *msg);
 
+                                          // size and validate a frame from its
+                                          // own bytes, ignoring the request it
+                                          // failed to match. See
+                                          // modbusmq_frame_drain().
+    int       (*modbusmq_frame_drain)     (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+
     int       (*modbusmq_frame_slave)     (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_function)  (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_error_code)(struct modbusmq_context_t *context, modbusmq_frame_t *frame);
@@ -119,7 +125,7 @@ typedef struct modbusmq_context_t
                          // next request goes out, or its response gets read
                          // through the leftovers of the previous one.
     int                   resync_pending;
-    
+
                          // callback for post_message
     void                 (*message_cb)(struct modbusmq_context_t *, modbusmq_msg_t *);
     

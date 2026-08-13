@@ -40,6 +40,7 @@ extern int  modbusmq_tcp_write_mask_registers     (modbusmq_context_t *context, 
 extern int      modbusmq_tcp_msg_prepare        (modbusmq_context_t *context, modbusmq_msg_t *msg);
 extern int  modbusmq_tcp_msg_check                (modbusmq_context_t *context, modbusmq_msg_t *msg);
 extern int  modbusmq_tcp_msg_check_header         (modbusmq_context_t *context, modbusmq_msg_t *msg);
+extern int  modbusmq_tcp_frame_drain              (modbusmq_context_t *context, modbusmq_frame_t *frame);
 
 extern int      modbusmq_tcp_frame_transaction_id (modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int      modbusmq_tcp_frame_slave          (modbusmq_context_t *context, modbusmq_frame_t *frame);
