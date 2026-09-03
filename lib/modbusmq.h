@@ -222,6 +222,8 @@ extern int   modbusmq_channel_in_range(struct modbusmq_context_t *context, modbu
     // Returns bytes written, < 0 for a format that cannot be encoded.
     //
 extern int   modbusmq_encode_value(int format, double value, uint8_t *out);
+    // bytes a data format occupies on the wire: 1, 2 or 4
+extern int   modbusmq_format_size(int format);
     //
     // Undo a write entry's add/mod/mul and encode the result into up to two
     // registers in wire order — the exact inverse of modbusmq_read_channel().

@@ -155,6 +155,30 @@ verbose
 ./modbusmq_query tcp://192.168.1.50:502 1 input_register 0x00 4 -2 -v
 ```
 
+It also writes. `--write` takes the value in engineering units and `--mod`/`--mul`/`--add`
+undo the scaling exactly as a config channel would, using the same encoder
+`modbusmq_subscribe` uses — so what you check here is what production will send.
+
+```
+# 25.5 degC into a signed register holding tenths of a degree
+./modbusmq_query tcp://192.168.1.50:502 39 holding_register 0x0028 --write 25.5 --format int_ab --mod -10
+
+# switch a coil on (function 05)
+./modbusmq_query tcp://192.168.1.50:502 39 coil 0x000C --write 1
+```
+
+`--dry-run` prints the frame and sends nothing. It needs no device at all, so the
+scaling in a config can be checked from a desk before anyone stands next to the
+equipment:
+
+```
+$ ./modbusmq_query rtu:///dev/ttyUSB0:9600:1:8:N 39 holding_register 0x0028 \
+      --write -5.0 --format int_ab --mod -10 --dry-run
+write: slave 39 reg 0x0028 = -5 (raw 0xFFCE, function 06)
+dry run, nothing sent. Frame body (no transaction id or CRC yet):
+  27 06 00 28 FF CE
+```
+
 Ideal for connectivity tests and low-level debugging.
 
 ## modbusmq_server

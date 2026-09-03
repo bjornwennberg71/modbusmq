@@ -230,6 +230,8 @@ extern modbusmq_config_t * modbusmq_config_get();
 // utility functions
 // 
 extern int modbusmq_config_input_type(const char *value);
+    // format name -> enum ModbusmqDataFormat, _unknown (and logged) when unrecognised
+extern int modbusmq_config_dataformat(const char *value);
 extern int modbusmq_config_write_function(const char *value);
 
 //

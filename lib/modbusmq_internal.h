@@ -171,8 +171,6 @@ extern int modbusmq_write(modbusmq_context_t *context, int fd, modbusmq_frame_t 
 
 extern int modbusmq_frame_incomplete(modbusmq_context_t *context, modbusmq_frame_t *frame);
 
-extern int modbusmq_format_size(int format);
-
 #ifdef __cplusplus
 }
 #endif
