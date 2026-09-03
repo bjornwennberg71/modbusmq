@@ -522,7 +522,7 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
         // shape. Modbus caps them at 2000 per request.
         //
         int
-            is_bit = (function == ModbusmqType_Coil || function == ModbusmqType_DiscreteInput);
+            is_bit = (function == modbusmq_type_coil || function == modbusmq_type_discrete_input);
 
         if (naddress <= 0 || naddress > (is_bit ? 2000 : 125))
         {

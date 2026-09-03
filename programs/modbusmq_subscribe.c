@@ -309,7 +309,7 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
     memset(&msg, 0, sizeof(msg));
     modbusmq_set_slave(context, write->slave);
 
-    if (write->function == ModbusmqWriteFunction_Coil)
+    if (write->function == modbusmq_write_function_coil)
     {
         int
             on = (value != 0);
@@ -820,20 +820,20 @@ main(int argc, char **argv)
         
         switch(input->type)
         {
-        case ModbusmqType_HoldingRegister:
+        case modbusmq_type_holding_register:
             modbusmq_frame_read_holding_registers(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
             break;
-        case ModbusmqType_InputRegister:
+        case modbusmq_type_input_register:
             modbusmq_frame_read_input_registers(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
             break;
-        case ModbusmqType_Coil:
+        case modbusmq_type_coil:
             //
             // naddress is a coil count here, not a register count — the device
             // answers with them packed eight to a byte.
             //
             modbusmq_frame_read_coil_bits(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
             break;
-        case ModbusmqType_DiscreteInput:
+        case modbusmq_type_discrete_input:
             modbusmq_frame_read_input_bits(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
             break;
         default:

@@ -34,7 +34,7 @@ typedef struct global_info
 
     int         is_write;    // --write was given
     double      write_value; // in engineering units, before scaling is undone
-    int         format;      // ModbusmqDataFormat_*, register writes only
+    int         format;      // modbusmq_data_format_*, register writes only
     int         mod;
     int         mul;
     int         add;
@@ -173,7 +173,7 @@ parse_argv(int argc, char **argv)
             else if (strcmp(flag, "--format") == 0)
             {
                 GI.format = modbusmq_config_dataformat(argv[a]);
-                if (GI.format == ModbusmqDataFormat_unknown)
+                if (GI.format == modbusmq_data_format_unknown)
                 {
                     return -1; // already reported, with the offending name
                 }
@@ -227,7 +227,7 @@ parse_argv(int argc, char **argv)
 
     if (GI.is_write)
     {
-        if (GI.input == ModbusmqType_InputRegister)
+        if (GI.input == modbusmq_type_input_register)
         {
             fprintf(stderr, "%s is read-only, nothing can be written to it\n", MODBUSMQ_TYPE_INPUT_REGISTER);
             return -1;
@@ -235,9 +235,9 @@ parse_argv(int argc, char **argv)
         //
         // A coil carries one bit, so a format would have nothing to describe.
         //
-        if (GI.input != ModbusmqType_Coil && GI.format == ModbusmqDataFormat_unknown)
+        if (GI.input != modbusmq_type_coil && GI.format == modbusmq_data_format_unknown)
         {
-            GI.format = ModbusmqDataFormat_ab; // uint_ab, the common case
+            GI.format = modbusmq_data_format_ab; // uint_ab, the common case
         }
     }
 
@@ -372,7 +372,7 @@ main(int argc, char **argv)
         uint16_t
             regs[2] = {0};
 
-        if (GI.input == ModbusmqType_Coil)
+        if (GI.input == modbusmq_type_coil)
         {
             int
                 on = (GI.write_value != 0);
@@ -388,7 +388,7 @@ main(int argc, char **argv)
             memset(&write, 0, sizeof(write));
             write.name    = "query";
             write.slave   = GI.slave;
-            write.type    = ModbusmqType_HoldingRegister;
+            write.type    = modbusmq_type_holding_register;
             write.address = GI.addr;
             write.format  = GI.format;
             write.length  = modbusmq_format_size(GI.format);
@@ -467,16 +467,16 @@ main(int argc, char **argv)
 
     switch(GI.input)
     {
-    case ModbusmqType_HoldingRegister:
+    case modbusmq_type_holding_register:
         modbusmq_frame_read_holding_registers(context, &msg.frame[0], GI.addr, GI.naddr);
         break;
-    case ModbusmqType_InputRegister:
+    case modbusmq_type_input_register:
         modbusmq_frame_read_input_registers(context, &msg.frame[0], GI.addr, GI.naddr);
         break;
-    case ModbusmqType_Coil:
+    case modbusmq_type_coil:
         modbusmq_frame_read_coil_bits(context, &msg.frame[0], GI.addr, GI.naddr);
         break;
-    case ModbusmqType_DiscreteInput:
+    case modbusmq_type_discrete_input:
         modbusmq_frame_read_input_bits(context, &msg.frame[0], GI.addr, GI.naddr);
         break;
     default:

@@ -771,7 +771,7 @@ modbusmq_read_float_cdab(const uint8_t *data)
  *
  * @brief number of bytes a channel format occupies
  *
- * @param format: ModbusmqDataFormat value
+ * @param format: modbusmq_data_format_e value
  *
  * @return size in bytes
  */
@@ -780,14 +780,14 @@ modbusmq_format_size(int format)
 {
     switch (format)
     {
-    case ModbusmqDataFormat_a:
-    case ModbusmqDataFormat_int8:
+    case modbusmq_data_format_a:
+    case modbusmq_data_format_int8:
         return 1;
-    case ModbusmqDataFormat_ab:
-    case ModbusmqDataFormat_ba:
-    case ModbusmqDataFormat_int16_ab:
-    case ModbusmqDataFormat_int16_ba:
-    case ModbusmqDataFormat_float_ba:
+    case modbusmq_data_format_ab:
+    case modbusmq_data_format_ba:
+    case modbusmq_data_format_int16_ab:
+    case modbusmq_data_format_int16_ba:
+    case modbusmq_data_format_float_ba:
         return 2;
     default:
         return 4;
@@ -913,20 +913,20 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
     {
         switch(channel->format)
         {
-        case ModbusmqDataFormat_float_abcd:  f = modbusmq_read_float_abcd(data + offset); break;
-        case ModbusmqDataFormat_float_badc:  f = modbusmq_read_float_badc(data + offset); break;
-        case ModbusmqDataFormat_float_dcba:  f = modbusmq_read_float_dcba(data + offset); break;
-        case ModbusmqDataFormat_float_cdab:  f = modbusmq_read_float_cdab(data + offset); break;
-        case ModbusmqDataFormat_ab:          f = modbusmq_read_int16_ab(data + offset);  value_len = 2; break;
-        case ModbusmqDataFormat_ba:          f = modbusmq_read_int16_ba(data + offset); value_len = 2;break;
-        case ModbusmqDataFormat_int16_ab:    f = modbusmq_read_int16_ab_signed(data + offset); value_len = 2; break;
-        case ModbusmqDataFormat_int16_ba:    f = modbusmq_read_int16_ba_signed(data + offset); value_len = 2; break;
-        case ModbusmqDataFormat_abcd:        f = (int32_t)(uint32_t)modbusmq_read_int32_abcd(data + offset); break;
-        case ModbusmqDataFormat_badc:        f = (int32_t)(uint32_t)modbusmq_read_int32_badc(data + offset); break;
-        case ModbusmqDataFormat_uint32_abcd: f = (uint32_t)modbusmq_read_int32_abcd(data + offset); break;
-        case ModbusmqDataFormat_uint32_badc: f = (uint32_t)modbusmq_read_int32_badc(data + offset); break;
-        case ModbusmqDataFormat_a:           f = data[offset]; value_len = 1; break;
-        case ModbusmqDataFormat_int8:        f = (int8_t)data[offset]; value_len = 1; break;
+        case modbusmq_data_format_float_abcd:  f = modbusmq_read_float_abcd(data + offset); break;
+        case modbusmq_data_format_float_badc:  f = modbusmq_read_float_badc(data + offset); break;
+        case modbusmq_data_format_float_dcba:  f = modbusmq_read_float_dcba(data + offset); break;
+        case modbusmq_data_format_float_cdab:  f = modbusmq_read_float_cdab(data + offset); break;
+        case modbusmq_data_format_ab:          f = modbusmq_read_int16_ab(data + offset);  value_len = 2; break;
+        case modbusmq_data_format_ba:          f = modbusmq_read_int16_ba(data + offset); value_len = 2;break;
+        case modbusmq_data_format_int16_ab:    f = modbusmq_read_int16_ab_signed(data + offset); value_len = 2; break;
+        case modbusmq_data_format_int16_ba:    f = modbusmq_read_int16_ba_signed(data + offset); value_len = 2; break;
+        case modbusmq_data_format_abcd:        f = (int32_t)(uint32_t)modbusmq_read_int32_abcd(data + offset); break;
+        case modbusmq_data_format_badc:        f = (int32_t)(uint32_t)modbusmq_read_int32_badc(data + offset); break;
+        case modbusmq_data_format_uint32_abcd: f = (uint32_t)modbusmq_read_int32_abcd(data + offset); break;
+        case modbusmq_data_format_uint32_badc: f = (uint32_t)modbusmq_read_int32_badc(data + offset); break;
+        case modbusmq_data_format_a:           f = data[offset]; value_len = 1; break;
+        case modbusmq_data_format_int8:        f = (int8_t)data[offset]; value_len = 1; break;
         default:
             modbusmq_logf(LOG_ERROR, "channel %s: unhandled data format %d. action: skip channel\n",
                           channel->topic ? channel->topic : "?", (int)channel->format);
@@ -962,7 +962,7 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
  * raw register value. modbusmq_write_encode() is the one that undoes add/mod/mul;
  * modbusmq_server uses this directly to lay out its default values.
  *
- * @param format: one of enum ModbusmqDataFormat
+ * @param format: one of enum modbusmq_data_format_e
  * @param value : raw value to encode
  * @param out   : at least 4 bytes of caller storage
  *
@@ -993,10 +993,10 @@ modbusmq_encode_value(int format, double value, uint8_t *out)
 
         switch (format)
         {
-        case ModbusmqDataFormat_ab:
-        case ModbusmqDataFormat_int16_ab: out[0] = (ivalue >> 8) & 0xff; out[1] = ivalue & 0xff; break;
-        case ModbusmqDataFormat_ba:
-        case ModbusmqDataFormat_int16_ba: out[1] = (ivalue >> 8) & 0xff; out[0] = ivalue & 0xff; break;
+        case modbusmq_data_format_ab:
+        case modbusmq_data_format_int16_ab: out[0] = (ivalue >> 8) & 0xff; out[1] = ivalue & 0xff; break;
+        case modbusmq_data_format_ba:
+        case modbusmq_data_format_int16_ba: out[1] = (ivalue >> 8) & 0xff; out[0] = ivalue & 0xff; break;
         default:
             return -1;
         }
@@ -1010,19 +1010,19 @@ modbusmq_encode_value(int format, double value, uint8_t *out)
 
         switch (format)
         {
-        case ModbusmqDataFormat_float_abcd:
-        case ModbusmqDataFormat_float_badc:
-        case ModbusmqDataFormat_float_dcba:
-        case ModbusmqDataFormat_float_cdab:
+        case modbusmq_data_format_float_abcd:
+        case modbusmq_data_format_float_badc:
+        case modbusmq_data_format_float_dcba:
+        case modbusmq_data_format_float_cdab:
         {
             float f = value;
             memcpy(&i, &f, 4);
             break;
         }
-        case ModbusmqDataFormat_abcd:
-        case ModbusmqDataFormat_badc:
-        case ModbusmqDataFormat_uint32_abcd:
-        case ModbusmqDataFormat_uint32_badc:
+        case modbusmq_data_format_abcd:
+        case modbusmq_data_format_badc:
+        case modbusmq_data_format_uint32_abcd:
+        case modbusmq_data_format_uint32_badc:
             i = (uint32_t)(int64_t)value;
             break;
         default:
@@ -1037,20 +1037,20 @@ modbusmq_encode_value(int format, double value, uint8_t *out)
 
         switch (format)
         {
-        case ModbusmqDataFormat_float_abcd:
-        case ModbusmqDataFormat_abcd:
-        case ModbusmqDataFormat_uint32_abcd:
+        case modbusmq_data_format_float_abcd:
+        case modbusmq_data_format_abcd:
+        case modbusmq_data_format_uint32_abcd:
             out[0] = a; out[1] = b; out[2] = c; out[3] = d;
             break;
-        case ModbusmqDataFormat_float_badc:
-        case ModbusmqDataFormat_badc:
-        case ModbusmqDataFormat_uint32_badc:
+        case modbusmq_data_format_float_badc:
+        case modbusmq_data_format_badc:
+        case modbusmq_data_format_uint32_badc:
             out[1] = a; out[0] = b; out[3] = c; out[2] = d;
             break;
-        case ModbusmqDataFormat_float_dcba:
+        case modbusmq_data_format_float_dcba:
             out[3] = a; out[2] = b; out[1] = c; out[0] = d;
             break;
-        case ModbusmqDataFormat_float_cdab:
+        case modbusmq_data_format_float_cdab:
             out[2] = a; out[3] = b; out[0] = c; out[1] = d;
             break;
         default:
@@ -1126,10 +1126,10 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
     raw -= write->add;
 
     int
-        is_float = (write->format == ModbusmqDataFormat_float_abcd ||
-                    write->format == ModbusmqDataFormat_float_badc ||
-                    write->format == ModbusmqDataFormat_float_dcba ||
-                    write->format == ModbusmqDataFormat_float_cdab);
+        is_float = (write->format == modbusmq_data_format_float_abcd ||
+                    write->format == modbusmq_data_format_float_badc ||
+                    write->format == modbusmq_data_format_float_dcba ||
+                    write->format == modbusmq_data_format_float_cdab);
 
     if (!is_float)
     {
@@ -1138,18 +1138,18 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
 
         switch (write->format)
         {
-        case ModbusmqDataFormat_int8:
+        case modbusmq_data_format_int8:
             lo = -128.0;        hi = 127.0;
             break;
-        case ModbusmqDataFormat_a:
+        case modbusmq_data_format_a:
             lo = 0.0;           hi = 255.0;
             break;
-        case ModbusmqDataFormat_int16_ab:
-        case ModbusmqDataFormat_int16_ba:
+        case modbusmq_data_format_int16_ab:
+        case modbusmq_data_format_int16_ba:
             lo = -32768.0;      hi = 32767.0;
             break;
-        case ModbusmqDataFormat_ab:
-        case ModbusmqDataFormat_ba:
+        case modbusmq_data_format_ab:
+        case modbusmq_data_format_ba:
             //
             // uint_ab/uint_ba read back as 0..65535. Accept the signed range
             // too and let it wrap into the same 16 bits, but refuse what fits
@@ -1157,8 +1157,8 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
             //
             lo = -32768.0;      hi = 65535.0;
             break;
-        case ModbusmqDataFormat_uint32_abcd:
-        case ModbusmqDataFormat_uint32_badc:
+        case modbusmq_data_format_uint32_abcd:
+        case modbusmq_data_format_uint32_badc:
             lo = 0.0;           hi = 4294967295.0;
             break;
         default:
@@ -2178,7 +2178,7 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
         // there are two timer-modes
         // 0: each timer is independent
         // 1: each timer executes after the other timer
-        if (context->config->query_mode == ModbusmqQueryModeParallell)
+        if (context->config->query_mode == modbusmq_query_mode_parallell)
         {
             timer->timer_next_time = timer->timer_start;
 
@@ -2207,7 +2207,7 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
                 }
             }
         }
-        else if (context->config->query_mode == ModbusmqQueryModeSeries)
+        else if (context->config->query_mode == modbusmq_query_mode_series)
         {
             // add previours timer->interval
             //

@@ -124,63 +124,63 @@ modbusmq_config_dataformat(const char *value)
     //
     if (strcmp(value, MODBUSMQ_FORMAT_A) == 0)
     {
-        return ModbusmqDataFormat_int8;
+        return modbusmq_data_format_int8;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_AB) == 0)
     {
-        return ModbusmqDataFormat_int16_ab;
+        return modbusmq_data_format_int16_ab;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_BA) == 0)
     {
-        return ModbusmqDataFormat_int16_ba;
+        return modbusmq_data_format_int16_ba;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_ABCD) == 0)
     {
-        return ModbusmqDataFormat_abcd;
+        return modbusmq_data_format_abcd;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_BADC) == 0)
     {
-        return ModbusmqDataFormat_badc;
+        return modbusmq_data_format_badc;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_UA) == 0)
     {
-        return ModbusmqDataFormat_a;
+        return modbusmq_data_format_a;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_UAB) == 0)
     {
-        return ModbusmqDataFormat_ab;
+        return modbusmq_data_format_ab;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_UBA) == 0)
     {
-        return ModbusmqDataFormat_ba;
+        return modbusmq_data_format_ba;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_UABCD) == 0)
     {
-        return ModbusmqDataFormat_uint32_abcd;
+        return modbusmq_data_format_uint32_abcd;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_UBADC) == 0)
     {
-        return ModbusmqDataFormat_uint32_badc;
+        return modbusmq_data_format_uint32_badc;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_BA) == 0)
     {
-        return ModbusmqDataFormat_float_ba;
+        return modbusmq_data_format_float_ba;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_ABCD) == 0)
     {
-        return ModbusmqDataFormat_float_abcd;
+        return modbusmq_data_format_float_abcd;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_BADC) == 0)
     {
-        return ModbusmqDataFormat_float_badc;
+        return modbusmq_data_format_float_badc;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_DCBA) == 0)
     {
-        return ModbusmqDataFormat_float_dcba;
+        return modbusmq_data_format_float_dcba;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_CDAB) == 0)
     {
-        return ModbusmqDataFormat_float_cdab;
+        return modbusmq_data_format_float_cdab;
     }
 
     //
@@ -189,7 +189,7 @@ modbusmq_config_dataformat(const char *value)
     // the assert vanished and left format 0 to be discovered much later.
     //
     modbusmq_logf(LOG_ERROR, "Unsupported format: %s\n", value);
-    return ModbusmqDataFormat_unknown;
+    return modbusmq_data_format_unknown;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -230,9 +230,9 @@ modbusmq_config_apply_format_version(modbusmq_config_t *config, const char *file
 
             switch (channel->format)
             {
-            case ModbusmqDataFormat_int8:     channel->format = ModbusmqDataFormat_a;  changed++; break;
-            case ModbusmqDataFormat_int16_ab: channel->format = ModbusmqDataFormat_ab; changed++; break;
-            case ModbusmqDataFormat_int16_ba: channel->format = ModbusmqDataFormat_ba; changed++; break;
+            case modbusmq_data_format_int8:     channel->format = modbusmq_data_format_a;  changed++; break;
+            case modbusmq_data_format_int16_ab: channel->format = modbusmq_data_format_ab; changed++; break;
+            case modbusmq_data_format_int16_ba: channel->format = modbusmq_data_format_ba; changed++; break;
             default: break;
             }
         }
@@ -245,9 +245,9 @@ modbusmq_config_apply_format_version(modbusmq_config_t *config, const char *file
 
         switch (write->format)
         {
-        case ModbusmqDataFormat_int8:     write->format = ModbusmqDataFormat_a;  changed++; break;
-        case ModbusmqDataFormat_int16_ab: write->format = ModbusmqDataFormat_ab; changed++; break;
-        case ModbusmqDataFormat_int16_ba: write->format = ModbusmqDataFormat_ba; changed++; break;
+        case modbusmq_data_format_int8:     write->format = modbusmq_data_format_a;  changed++; break;
+        case modbusmq_data_format_int16_ab: write->format = modbusmq_data_format_ab; changed++; break;
+        case modbusmq_data_format_int16_ba: write->format = modbusmq_data_format_ba; changed++; break;
         default: break;
         }
     }
@@ -266,18 +266,18 @@ int modbusmq_config_query_mode(const char *key)
 {
     if (strcmp(key, "parallell") == 0)
     {
-        return ModbusmqQueryModeParallell;
+        return modbusmq_query_mode_parallell;
     }
     else if (strcmp(key, "series") == 0)
     {
-        return ModbusmqQueryModeSeries;
+        return modbusmq_query_mode_series;
     }
 
     // you can also use numbers instead of text
     //
     int
         value = strtol(key, NULL, 0);
-    if (value >= ModbusmqQueryModeMin && value <= ModbusmqQueryModeMax)
+    if (value >= modbusmq_query_mode_min && value <= modbusmq_query_mode_max)
     {
         return value;
     }
@@ -293,42 +293,42 @@ modbusmq_config_input_type(const char *value)
 {
     if (strcmp(value, MODBUSMQ_TYPE_INPUT_REGISTER) == 0)
     {
-        return ModbusmqType_InputRegister;
+        return modbusmq_type_input_register;
     }
     else if (strcmp(value, MODBUSMQ_TYPE_HOLDING_REGISTER) == 0)
     {
-        return ModbusmqType_HoldingRegister;
+        return modbusmq_type_holding_register;
     }
     else if (strcmp(value, MODBUSMQ_TYPE_COIL) == 0)
     {
-        return ModbusmqType_Coil;
+        return modbusmq_type_coil;
     }
     else if (strcmp(value, MODBUSMQ_TYPE_DISCRETE_INPUT) == 0)
     {
-        return ModbusmqType_DiscreteInput;
+        return modbusmq_type_discrete_input;
     }
     return 0;
 }
 
 //////////////////////////////////////////////////////////////////////////////
 // 
-// write function name -> ModbusmqWriteFunction_e, _Unknown when unrecognised
+// write function name -> modbusmq_write_function_e, _Unknown when unrecognised
 int
 modbusmq_config_write_function(const char *value)
 {
     if (strcmp(value, MODBUSMQ_FUNCTION_WRITE_COIL) == 0)
     {
-        return ModbusmqWriteFunction_Coil;
+        return modbusmq_write_function_coil;
     }
     else if (strcmp(value, MODBUSMQ_FUNCTION_WRITE_REGISTER) == 0)
     {
-        return ModbusmqWriteFunction_Register;
+        return modbusmq_write_function_register;
     }
     else if (strcmp(value, MODBUSMQ_FUNCTION_WRITE_REGISTERS) == 0)
     {
-        return ModbusmqWriteFunction_Registers;
+        return modbusmq_write_function_registers;
     }
-    return ModbusmqWriteFunction_Unknown;
+    return modbusmq_write_function_unknown;
 }
 
 
@@ -457,11 +457,11 @@ modbusmq_config_parse(const char *filename)
             if (modbusmq_config->query_mode < 0)
             {
                 fprintf(stderr, "%d: invalid query_mode: %s, setting query_type=parallell\n", line_num, key);
-                modbusmq_config->query_mode = ModbusmqQueryModeParallell;
+                modbusmq_config->query_mode = modbusmq_query_mode_parallell;
             }
-            if (modbusmq_config->query_mode < ModbusmqQueryModeMin || modbusmq_config->query_mode >= ModbusmqQueryModeMax)
+            if (modbusmq_config->query_mode < modbusmq_query_mode_min || modbusmq_config->query_mode >= modbusmq_query_mode_max)
             {
-                modbusmq_config->query_mode = ModbusmqQueryModeParallell;
+                modbusmq_config->query_mode = modbusmq_query_mode_parallell;
             }
         }
         else if (strcmp(key, "input.max") == 0)
@@ -616,7 +616,7 @@ modbusmq_config_parse(const char *filename)
                 else if (strcmp(channel_key, "format") == 0)
                 {
                     channel->format = modbusmq_config_dataformat(value);
-                    if (channel->format == ModbusmqDataFormat_unknown)
+                    if (channel->format == modbusmq_data_format_unknown)
                     {
                         fprintf(stderr, "%d: %s=%s: unknown format\n", line_num, key, value);
                         fclose(fp);
@@ -741,7 +741,7 @@ modbusmq_config_parse(const char *filename)
                 // A discrete input is read-only by definition, and an input
                 // register has no write function at all.
                 //
-                if (write->type != ModbusmqType_Coil && write->type != ModbusmqType_HoldingRegister)
+                if (write->type != modbusmq_type_coil && write->type != modbusmq_type_holding_register)
                 {
                     fprintf(stderr, "%d: %s=%s: not writable, expected %s or %s\n",
                             line_num, key, value, MODBUSMQ_TYPE_COIL, MODBUSMQ_TYPE_HOLDING_REGISTER);
@@ -753,7 +753,7 @@ modbusmq_config_parse(const char *filename)
             else if (strcmp(write_key, "function") == 0)
             {
                 write->function = modbusmq_config_write_function(value);
-                if (write->function == ModbusmqWriteFunction_Unknown)
+                if (write->function == modbusmq_write_function_unknown)
                 {
                     fprintf(stderr, "%d: %s=%s: expected %s, %s or %s\n",
                             line_num, key, value,
@@ -772,7 +772,7 @@ modbusmq_config_parse(const char *filename)
             else if (strcmp(write_key, "format") == 0)
             {
                 write->format = modbusmq_config_dataformat(value);
-                if (write->format == ModbusmqDataFormat_unknown)
+                if (write->format == modbusmq_data_format_unknown)
                 {
                     fprintf(stderr, "%d: %s=%s: unknown format\n", line_num, key, value);
                     fclose(fp);
@@ -866,17 +866,17 @@ modbusmq_config_parse(const char *filename)
 
             if (MODBUSMQ_TYPE_IS_BIT(input->type))
             {
-                if (channel->format != ModbusmqDataFormat_unknown)
+                if (channel->format != modbusmq_data_format_unknown)
                 {
                     fprintf(stderr, "input.%d.channel.%d: format does not apply to a %s input, offset is a coil index\n",
                             i+1, c+1,
-                            input->type == ModbusmqType_Coil ? MODBUSMQ_TYPE_COIL : MODBUSMQ_TYPE_DISCRETE_INPUT);
+                            input->type == modbusmq_type_coil ? MODBUSMQ_TYPE_COIL : MODBUSMQ_TYPE_DISCRETE_INPUT);
                     return -1;
                 }
                 continue;
             }
 
-            if (channel->format == ModbusmqDataFormat_unknown)
+            if (channel->format == modbusmq_data_format_unknown)
             {
                 fprintf(stderr, "input.%d.channel.%d: format is required\n", i+1, c+1);
                 return -1;
@@ -927,35 +927,35 @@ modbusmq_config_parse(const char *filename)
         // either, derive the missing one, and refuse a config that says both
         // and disagrees with itself.
         //
-        if (write->type == 0 && write->function == ModbusmqWriteFunction_Unknown)
+        if (write->type == 0 && write->function == modbusmq_write_function_unknown)
         {
             fprintf(stderr, "write.%d (%s): either type or function is required\n", w+1, name);
             return -1;
         }
 
-        if (write->function == ModbusmqWriteFunction_Unknown)
+        if (write->function == modbusmq_write_function_unknown)
         {
-            if (write->type == ModbusmqType_Coil)
+            if (write->type == modbusmq_type_coil)
             {
-                write->function = ModbusmqWriteFunction_Coil;
+                write->function = modbusmq_write_function_coil;
             }
             else
             {
-                write->function = (write->length == 4) ? ModbusmqWriteFunction_Registers
-                                                       : ModbusmqWriteFunction_Register;
+                write->function = (write->length == 4) ? modbusmq_write_function_registers
+                                                       : modbusmq_write_function_register;
             }
         }
         else if (write->type == 0)
         {
-            write->type = (write->function == ModbusmqWriteFunction_Coil) ? ModbusmqType_Coil
-                                                                          : ModbusmqType_HoldingRegister;
+            write->type = (write->function == modbusmq_write_function_coil) ? modbusmq_type_coil
+                                                                          : modbusmq_type_holding_register;
         }
         else
         {
             int
-                coil_type = (write->type     == ModbusmqType_Coil);
+                coil_type = (write->type     == modbusmq_type_coil);
             int
-                coil_func = (write->function == ModbusmqWriteFunction_Coil);
+                coil_func = (write->function == modbusmq_write_function_coil);
 
             if (coil_type != coil_func)
             {
@@ -964,7 +964,7 @@ modbusmq_config_parse(const char *filename)
             }
         }
 
-        if (write->function == ModbusmqWriteFunction_Coil)
+        if (write->function == modbusmq_write_function_coil)
         {
             //
             // A coil is one bit. Scaling it is always a mistake, so say so
@@ -978,7 +978,7 @@ modbusmq_config_parse(const char *filename)
             continue;
         }
 
-        if (write->format == ModbusmqDataFormat_unknown)
+        if (write->format == modbusmq_data_format_unknown)
         {
             fprintf(stderr, "write.%d (%s): format is required for a register write\n", w+1, name);
             return -1;
@@ -992,7 +992,7 @@ modbusmq_config_parse(const char *filename)
             fprintf(stderr, "write.%d (%s): format is not writable, a register write is 2 or 4 bytes\n", w+1, name);
             return -1;
         }
-        if (write->length == 4 && write->function == ModbusmqWriteFunction_Register)
+        if (write->length == 4 && write->function == modbusmq_write_function_register)
         {
             fprintf(stderr, "write.%d (%s): a 4-byte format needs %s, function 06 writes one register\n",
                     w+1, name, MODBUSMQ_FUNCTION_WRITE_REGISTERS);

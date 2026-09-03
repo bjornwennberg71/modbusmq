@@ -19,12 +19,12 @@ extern "C" {
 // The values are the Modbus read function codes, so an input's type is also
 // the function used to poll it.
 //
-enum ModbusmqType_e
+enum modbusmq_type_e
 {
-    ModbusmqType_Coil            = 0x01,
-    ModbusmqType_DiscreteInput   = 0x02,
-    ModbusmqType_HoldingRegister = 0x03,
-    ModbusmqType_InputRegister   = 0x04
+    modbusmq_type_coil             = 0x01,
+    modbusmq_type_discrete_input   = 0x02,
+    modbusmq_type_holding_register = 0x03,
+    modbusmq_type_input_register   = 0x04
 };
 
 #define MODBUSMQ_TYPE_COIL             "coil"
@@ -34,19 +34,19 @@ enum ModbusmqType_e
 
 //
 // Which Modbus function a write.N entry uses. The values are the function
-// codes themselves, the same way ModbusmqType_e carries 0x03/0x04.
+// codes themselves, the same way modbusmq_type_e carries 0x03/0x04.
 //
 // Only single-coil (05) and single/multiple register (06/16) writes are
 // offered. Function 15, write multiple coils, is deliberately absent: one
 // write entry addresses one thing, so there is never more than one coil to
 // set, and 15 buys nothing but a bit-packing order to get wrong.
 //
-enum ModbusmqWriteFunction_e
+enum modbusmq_write_function_e
 {
-    ModbusmqWriteFunction_Unknown   = 0x00,
-    ModbusmqWriteFunction_Coil      = 0x05,
-    ModbusmqWriteFunction_Register  = 0x06,
-    ModbusmqWriteFunction_Registers = 0x10
+    modbusmq_write_function_unknown   = 0x00,
+    modbusmq_write_function_coil      = 0x05,
+    modbusmq_write_function_register  = 0x06,
+    modbusmq_write_function_registers = 0x10
 };
 
 #define MODBUSMQ_FUNCTION_WRITE_COIL      "write_coil"
@@ -65,24 +65,24 @@ enum ModbusmqWriteFunction_e
 // old one and are warned at startup, so an already-deployed file never changes
 // meaning underneath its owner. See modbusmq_config_apply_format_version().
 //
-enum ModbusmqDataFormat
+enum modbusmq_data_format_e
 {
-    ModbusmqDataFormat_unknown = 0,
-    ModbusmqDataFormat_a,    // uint8_t
-    ModbusmqDataFormat_ab,   // uint16_t, high byte first
-    ModbusmqDataFormat_ba,   // uint16_t, low byte first
-    ModbusmqDataFormat_int8,     // int8_t
-    ModbusmqDataFormat_int16_ab, // int16_t, high byte first
-    ModbusmqDataFormat_int16_ba, // int16_t, low byte first
-    ModbusmqDataFormat_abcd,     // int32_t, high byte first
-    ModbusmqDataFormat_badc,     // int32_t, mixed
-    ModbusmqDataFormat_uint32_abcd,
-    ModbusmqDataFormat_uint32_badc,
-    ModbusmqDataFormat_float_ba, // float
-    ModbusmqDataFormat_float_abcd, // float
-    ModbusmqDataFormat_float_badc, // float
-    ModbusmqDataFormat_float_dcba, // float
-    ModbusmqDataFormat_float_cdab  // float, low word first (common in industrial Modbus devices)
+    modbusmq_data_format_unknown = 0,
+    modbusmq_data_format_a,    // uint8_t
+    modbusmq_data_format_ab,   // uint16_t, high byte first
+    modbusmq_data_format_ba,   // uint16_t, low byte first
+    modbusmq_data_format_int8,     // int8_t
+    modbusmq_data_format_int16_ab, // int16_t, high byte first
+    modbusmq_data_format_int16_ba, // int16_t, low byte first
+    modbusmq_data_format_abcd,     // int32_t, high byte first
+    modbusmq_data_format_badc,     // int32_t, mixed
+    modbusmq_data_format_uint32_abcd,
+    modbusmq_data_format_uint32_badc,
+    modbusmq_data_format_float_ba, // float
+    modbusmq_data_format_float_abcd, // float
+    modbusmq_data_format_float_badc, // float
+    modbusmq_data_format_float_dcba, // float
+    modbusmq_data_format_float_cdab  // float, low word first (common in industrial Modbus devices)
 
 };
 
@@ -107,13 +107,13 @@ enum ModbusmqDataFormat
 #define MODBUSMQ_FORMAT_FLOAT_DCBA "float_dcba"
 #define MODBUSMQ_FORMAT_FLOAT_CDAB "float_cdab"
 
-typedef enum ModbusmqQueryMode_e
+typedef enum modbusmq_query_mode_e
 {
-    ModbusmqQueryModeMin       = 0,
-    ModbusmqQueryModeParallell = 0, // parallell
-    ModbusmqQueryModeSeries    = 1,  // series
-    ModbusmqQueryModeMax 
-} ModbusmqQueryTypeMode_e;
+    modbusmq_query_mode_min       = 0,
+    modbusmq_query_mode_parallell = 0, // parallell
+    modbusmq_query_mode_series    = 1,  // series
+    modbusmq_query_mode_max 
+} modbusmq_query_mode_t;
 
 //
 // info about one channel
@@ -164,8 +164,8 @@ typedef struct modbusmq_write_t
     int                 slave;
     uint8_t             has_slave;
 
-    int                 type;     // ModbusmqType_Coil or _HoldingRegister
-    int                 function; // ModbusmqWriteFunction_e
+    int                 type;     // modbusmq_type_coil or _HoldingRegister
+    int                 function; // modbusmq_write_function_e
     int                 address;
     uint8_t             has_address;
 
@@ -230,7 +230,7 @@ extern modbusmq_config_t * modbusmq_config_get();
 // utility functions
 // 
 extern int modbusmq_config_input_type(const char *value);
-    // format name -> enum ModbusmqDataFormat, _unknown (and logged) when unrecognised
+    // format name -> enum modbusmq_data_format_e, _unknown (and logged) when unrecognised
 extern int modbusmq_config_dataformat(const char *value);
 extern int modbusmq_config_write_function(const char *value);
 
@@ -239,7 +239,7 @@ extern int modbusmq_config_write_function(const char *value);
 // bytes. Enough of the code has to branch on that distinction to be worth
 // naming it once.
 //
-#define MODBUSMQ_TYPE_IS_BIT(t) ((t) == ModbusmqType_Coil || (t) == ModbusmqType_DiscreteInput)
+#define MODBUSMQ_TYPE_IS_BIT(t) ((t) == modbusmq_type_coil || (t) == modbusmq_type_discrete_input)
 
 #ifdef __cplusplus
 }
