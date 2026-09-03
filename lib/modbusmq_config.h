@@ -53,16 +53,31 @@ enum ModbusmqWriteFunction_e
 #define MODBUSMQ_FUNCTION_WRITE_REGISTER  "write_register"
 #define MODBUSMQ_FUNCTION_WRITE_REGISTERS "write_registers"
     
+//
+// The name says the type, the suffix says the byte order: ab is high byte
+// first, ba is low byte first, abcd and badc the 32-bit equivalents.
+//
+// int_* is signed and uint_* is unsigned, as everywhere else in C.
+//
+// int_ab and int_ba used to mean *unsigned*, which is how a sub-zero
+// temperature came to publish as 6548.6 rather than -5.0. Configs declaring
+// config.version 2.0 or later get the corrected meaning; older ones keep the
+// old one and are warned at startup, so an already-deployed file never changes
+// meaning underneath its owner. See modbusmq_config_apply_format_version().
+//
 enum ModbusmqDataFormat
 {
     ModbusmqDataFormat_unknown = 0,
     ModbusmqDataFormat_a,    // uint8_t
-    ModbusmqDataFormat_ab,   // uint16_t little endian
-    ModbusmqDataFormat_ba,   // uint16_t big endian
-    ModbusmqDataFormat_int16_ab, // int16_t, signed, high byte first
-    ModbusmqDataFormat_int16_ba, // int16_t, signed, low byte first
-    ModbusmqDataFormat_abcd,
-    ModbusmqDataFormat_badc,
+    ModbusmqDataFormat_ab,   // uint16_t, high byte first
+    ModbusmqDataFormat_ba,   // uint16_t, low byte first
+    ModbusmqDataFormat_int8,     // int8_t
+    ModbusmqDataFormat_int16_ab, // int16_t, high byte first
+    ModbusmqDataFormat_int16_ba, // int16_t, low byte first
+    ModbusmqDataFormat_abcd,     // int32_t, high byte first
+    ModbusmqDataFormat_badc,     // int32_t, mixed
+    ModbusmqDataFormat_uint32_abcd,
+    ModbusmqDataFormat_uint32_badc,
     ModbusmqDataFormat_float_ba, // float
     ModbusmqDataFormat_float_abcd, // float
     ModbusmqDataFormat_float_badc, // float
@@ -74,10 +89,18 @@ enum ModbusmqDataFormat
 #define MODBUSMQ_FORMAT_A          "int_a"
 #define MODBUSMQ_FORMAT_AB         "int_ab"
 #define MODBUSMQ_FORMAT_BA         "int_ba"
-#define MODBUSMQ_FORMAT_INT16_AB   "int16"
-#define MODBUSMQ_FORMAT_INT16_BA   "int16_ba"
 #define MODBUSMQ_FORMAT_ABCD       "int_abcd"
 #define MODBUSMQ_FORMAT_BADC       "int_badc"
+#define MODBUSMQ_FORMAT_UA         "uint_a"
+#define MODBUSMQ_FORMAT_UAB        "uint_ab"
+#define MODBUSMQ_FORMAT_UBA        "uint_ba"
+#define MODBUSMQ_FORMAT_UABCD      "uint_abcd"
+#define MODBUSMQ_FORMAT_UBADC      "uint_badc"
+
+//
+// config.version at which int_* became signed
+//
+#define MODBUSMQ_SIGNED_INT_VERSION 2.0
 #define MODBUSMQ_FORMAT_FLOAT_BA   "float_ba"
 #define MODBUSMQ_FORMAT_FLOAT_ABCD "float_abcd"
 #define MODBUSMQ_FORMAT_FLOAT_BADC "float_badc"

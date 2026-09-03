@@ -781,6 +781,7 @@ modbusmq_format_size(int format)
     switch (format)
     {
     case ModbusmqDataFormat_a:
+    case ModbusmqDataFormat_int8:
         return 1;
     case ModbusmqDataFormat_ab:
     case ModbusmqDataFormat_ba:
@@ -920,8 +921,12 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
         case ModbusmqDataFormat_ba:          f = modbusmq_read_int16_ba(data + offset); value_len = 2;break;
         case ModbusmqDataFormat_int16_ab:    f = modbusmq_read_int16_ab_signed(data + offset); value_len = 2; break;
         case ModbusmqDataFormat_int16_ba:    f = modbusmq_read_int16_ba_signed(data + offset); value_len = 2; break;
-        case ModbusmqDataFormat_abcd:        f = modbusmq_read_int32_abcd(data + offset); break;
-        case ModbusmqDataFormat_badc:        f = modbusmq_read_int32_badc(data + offset); break;
+        case ModbusmqDataFormat_abcd:        f = (int32_t)(uint32_t)modbusmq_read_int32_abcd(data + offset); break;
+        case ModbusmqDataFormat_badc:        f = (int32_t)(uint32_t)modbusmq_read_int32_badc(data + offset); break;
+        case ModbusmqDataFormat_uint32_abcd: f = (uint32_t)modbusmq_read_int32_abcd(data + offset); break;
+        case ModbusmqDataFormat_uint32_badc: f = (uint32_t)modbusmq_read_int32_badc(data + offset); break;
+        case ModbusmqDataFormat_a:           f = data[offset]; value_len = 1; break;
+        case ModbusmqDataFormat_int8:        f = (int8_t)data[offset]; value_len = 1; break;
         default:
             modbusmq_logf(LOG_ERROR, "channel %s: unhandled data format %d. action: skip channel\n",
                           channel->topic ? channel->topic : "?", (int)channel->format);
@@ -1016,6 +1021,8 @@ modbusmq_encode_value(int format, double value, uint8_t *out)
         }
         case ModbusmqDataFormat_abcd:
         case ModbusmqDataFormat_badc:
+        case ModbusmqDataFormat_uint32_abcd:
+        case ModbusmqDataFormat_uint32_badc:
             i = (uint32_t)(int64_t)value;
             break;
         default:
@@ -1032,10 +1039,12 @@ modbusmq_encode_value(int format, double value, uint8_t *out)
         {
         case ModbusmqDataFormat_float_abcd:
         case ModbusmqDataFormat_abcd:
+        case ModbusmqDataFormat_uint32_abcd:
             out[0] = a; out[1] = b; out[2] = c; out[3] = d;
             break;
         case ModbusmqDataFormat_float_badc:
         case ModbusmqDataFormat_badc:
+        case ModbusmqDataFormat_uint32_badc:
             out[1] = a; out[0] = b; out[3] = c; out[2] = d;
             break;
         case ModbusmqDataFormat_float_dcba:
@@ -1129,6 +1138,12 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
 
         switch (write->format)
         {
+        case ModbusmqDataFormat_int8:
+            lo = -128.0;        hi = 127.0;
+            break;
+        case ModbusmqDataFormat_a:
+            lo = 0.0;           hi = 255.0;
+            break;
         case ModbusmqDataFormat_int16_ab:
         case ModbusmqDataFormat_int16_ba:
             lo = -32768.0;      hi = 32767.0;
@@ -1136,14 +1151,18 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
         case ModbusmqDataFormat_ab:
         case ModbusmqDataFormat_ba:
             //
-            // modbusmq_read_int16_ab()/_ba() do not sign-extend, so these read
-            // back as 0..65535. Accept the signed range too and let it wrap
-            // into the same 16 bits, but refuse what fits neither reading.
+            // uint_ab/uint_ba read back as 0..65535. Accept the signed range
+            // too and let it wrap into the same 16 bits, but refuse what fits
+            // neither reading.
             //
             lo = -32768.0;      hi = 65535.0;
             break;
+        case ModbusmqDataFormat_uint32_abcd:
+        case ModbusmqDataFormat_uint32_badc:
+            lo = 0.0;           hi = 4294967295.0;
+            break;
         default:
-            lo = -2147483648.0; hi = 4294967295.0;
+            lo = -2147483648.0; hi = 2147483647.0;
             break;
         }
 

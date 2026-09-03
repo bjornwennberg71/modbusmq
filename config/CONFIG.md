@@ -165,22 +165,42 @@ Only `offset`, `format`, and `topic` are required. `add`, `mod`, `mul`, and `val
 
 ### Data formats
 
+The name says the type, the suffix says the byte order: `ab` high byte first, `ba` low byte first, `abcd` and `badc` the 32-bit equivalents. `int_*` is signed, `uint_*` is unsigned.
+
 | Format        | Size   | Description                          |
 |---------------|--------|--------------------------------------|
-| `int_a`       | 1 byte | unsigned 8-bit                       |
-| `int_ab`      | 2 bytes | 16-bit unsigned, big-endian (most common) |
-| `int_ba`      | 2 bytes | 16-bit unsigned, little-endian      |
-| `int16`       | 2 bytes | 16-bit **signed**, big-endian       |
-| `int16_ba`    | 2 bytes | 16-bit **signed**, little-endian    |
-| `int_abcd`    | 4 bytes | 32-bit, big-endian                  |
-| `int_badc`    | 4 bytes | 32-bit, mixed-endian (BADC)         |
+| `uint_a`      | 1 byte | unsigned 8-bit                       |
+| `int_a`       | 1 byte | signed 8-bit                         |
+| `uint_ab`     | 2 bytes | unsigned 16-bit, big-endian (most common) |
+| `uint_ba`     | 2 bytes | unsigned 16-bit, little-endian      |
+| `int_ab`      | 2 bytes | signed 16-bit, big-endian           |
+| `int_ba`      | 2 bytes | signed 16-bit, little-endian        |
+| `uint_abcd`   | 4 bytes | unsigned 32-bit, big-endian         |
+| `uint_badc`   | 4 bytes | unsigned 32-bit, mixed-endian       |
+| `int_abcd`    | 4 bytes | signed 32-bit, big-endian           |
+| `int_badc`    | 4 bytes | signed 32-bit, mixed-endian         |
 | `float_abcd`  | 4 bytes | IEEE 754 float, big-endian          |
 | `float_badc`  | 4 bytes | IEEE 754 float, mixed-endian (BADC) |
 | `float_dcba`  | 4 bytes | IEEE 754 float, little-endian       |
+| `float_cdab`  | 4 bytes | IEEE 754 float, low word first      |
 
-When in doubt, start with `int_ab` — it is the most common encoding for Modbus devices.
+Pick `uint_ab` for anything that cannot go negative — a speed, a voltage, a percentage, a status word — and `int_ab` for anything that can. Getting it wrong on a temperature is the classic failure: read unsigned, an ambient of −5.0 °C arrives as `0xFFCE`, decodes as 65486 and scales to 6548.6 °C.
 
-**Use `int16`, not `int_ab`, for anything that can go negative.** `int_ab` and `int_ba` do not sign-extend: they read 0..65535. A temperature of −5.0 °C arrives on the wire as `0xFFCE`, which `int_ab` decodes as 65486 and then scales to 6548.6 °C. Outdoor and inlet temperatures are the usual casualties.
+A **status or flag word must be unsigned**. Read signed, a word with the top bit set publishes as a negative number instead of the bit pattern you wanted.
+
+#### `int_ab` changed meaning in config.version 2.0
+
+`int_ab` and `int_ba` originally meant *unsigned*, and there was no signed 16-bit format at all. That is now fixed, but a config file already deployed somewhere must not change meaning just because the library was upgraded — so the new meaning is opt-in:
+
+```
+config.version = 2.0     # int_* is signed, uint_* is unsigned
+```
+
+Below 2.0, or with no `config.version` at all, `int_a`/`int_ab`/`int_ba` keep the old unsigned meaning and the program logs one line at startup naming the file and how many channels are affected. Nothing breaks and nothing changes underneath you.
+
+**To migrate a config**: set `config.version = 2.0`, then go through each `int_ab` channel and decide. Anything that genuinely cannot go negative becomes `uint_ab`; anything that can stays `int_ab` and now decodes correctly. It is worth doing channel by channel rather than with a search and replace — the channels where the answer is "signed" are exactly the ones that were quietly broken before.
+
+The 32-bit formats did not change behaviour. `int_abcd` was already signed, though only by an implementation-defined conversion rather than on purpose; it is now signed deliberately, and `uint_abcd` exists for the other case.
 
 ### Scaling
 
@@ -198,6 +218,7 @@ if mul != 0: result = result * mul
 | Raw value | add    | mod  | mul | Result           | Use case |
 |-----------|--------|------|-----|------------------|----------|
 | 4800      | 0      | -100 | 0   | 48.00            | voltage in hundredths of a volt |
+| -50       | 0      | -10  | 0   | -5.00            | sub-zero temperature, `int_ab` |
 | 10500     | -10000 | -10  | -1  | 50.00            | signed current with offset |
 | 434       | -400   | -10  | 0   | 3.4              | temperature with -40 offset |
 

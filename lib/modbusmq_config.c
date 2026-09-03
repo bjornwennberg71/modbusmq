@@ -95,23 +95,22 @@ modbusmq_config_debug_print(const char *key, const char *value, int line_num)
 int
 modbusmq_config_dataformat(const char *value)
 {
+    //
+    // int_* is parsed as signed here, which is the config.version 2.0 meaning.
+    // A config declaring an older version has these mapped back to unsigned
+    // afterwards by modbusmq_config_apply_format_version(), once the whole
+    // file has been read and the version is actually known — config.version
+    // is not required to appear before the keys it governs.
+    //
     if (strcmp(value, MODBUSMQ_FORMAT_A) == 0)
     {
-        return ModbusmqDataFormat_a;
+        return ModbusmqDataFormat_int8;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_AB) == 0)
     {
-        return ModbusmqDataFormat_ab;
-    }
-    else if (strcmp(value, MODBUSMQ_FORMAT_BA) == 0)
-    {
-        return ModbusmqDataFormat_ba;
-    }
-    else if (strcmp(value, MODBUSMQ_FORMAT_INT16_AB) == 0)
-    {
         return ModbusmqDataFormat_int16_ab;
     }
-    else if (strcmp(value, MODBUSMQ_FORMAT_INT16_BA) == 0)
+    else if (strcmp(value, MODBUSMQ_FORMAT_BA) == 0)
     {
         return ModbusmqDataFormat_int16_ba;
     }
@@ -122,6 +121,26 @@ modbusmq_config_dataformat(const char *value)
     else if (strcmp(value, MODBUSMQ_FORMAT_BADC) == 0)
     {
         return ModbusmqDataFormat_badc;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_UA) == 0)
+    {
+        return ModbusmqDataFormat_a;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_UAB) == 0)
+    {
+        return ModbusmqDataFormat_ab;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_UBA) == 0)
+    {
+        return ModbusmqDataFormat_ba;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_UABCD) == 0)
+    {
+        return ModbusmqDataFormat_uint32_abcd;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_UBADC) == 0)
+    {
+        return ModbusmqDataFormat_uint32_badc;
     }
     else if (strcmp(value, MODBUSMQ_FORMAT_FLOAT_BA) == 0)
     {
@@ -151,6 +170,76 @@ modbusmq_config_dataformat(const char *value)
     //
     modbusmq_logf(LOG_ERROR, "Unsupported format: %s\n", value);
     return ModbusmqDataFormat_unknown;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Apply the config.version meaning of int_a / int_ab / int_ba.
+//
+// Before version 2.0 those names meant *unsigned*. Everything is parsed as
+// signed, so this walks back the ones belonging to an older config and says
+// so — once, with a count, rather than per channel.
+//
+// The point is that no already-deployed config ever changes meaning because
+// the library was upgraded. It keeps behaving exactly as it did and is told
+// how to opt in.
+//
+static void
+modbusmq_config_apply_format_version(modbusmq_config_t *config, const char *filename)
+{
+    double
+        version = config->config_version ? strtod(config->config_version, NULL) : 0.0;
+
+    if (version >= MODBUSMQ_SIGNED_INT_VERSION)
+    {
+        return; // int_* is signed, which is how it was already parsed
+    }
+
+    int
+        changed = 0;
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &config->inputs[i];
+
+        for(int c = 0; c < input->channel_max; ++c)
+        {
+            modbusmq_channel_t
+                *channel = &input->channels[c];
+
+            switch (channel->format)
+            {
+            case ModbusmqDataFormat_int8:     channel->format = ModbusmqDataFormat_a;  changed++; break;
+            case ModbusmqDataFormat_int16_ab: channel->format = ModbusmqDataFormat_ab; changed++; break;
+            case ModbusmqDataFormat_int16_ba: channel->format = ModbusmqDataFormat_ba; changed++; break;
+            default: break;
+            }
+        }
+    }
+
+    for(int w = 0; w < config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &config->writes[w];
+
+        switch (write->format)
+        {
+        case ModbusmqDataFormat_int8:     write->format = ModbusmqDataFormat_a;  changed++; break;
+        case ModbusmqDataFormat_int16_ab: write->format = ModbusmqDataFormat_ab; changed++; break;
+        case ModbusmqDataFormat_int16_ba: write->format = ModbusmqDataFormat_ba; changed++; break;
+        default: break;
+        }
+    }
+
+    if (changed > 0)
+    {
+        modbusmq_logf(LOG_ERROR,
+                      "%s: config.version is %s, so %d channel(s) using int_a/int_ab/int_ba keep the old "
+                      "UNSIGNED meaning. A negative reading will publish as a large positive number. "
+                      "To fix: set config.version = 2.0 and spell the genuinely unsigned ones uint_ab/uint_ba.\n",
+                      filename, config->config_version ? config->config_version : "unset", changed);
+    }
 }
 
 int modbusmq_config_query_mode(const char *key)
@@ -724,6 +813,13 @@ modbusmq_config_parse(const char *filename)
 
     fclose(fp);
     free(line);
+
+    //
+    // Resolve what int_* means for this config before anything validates or
+    // uses a format. config.version may appear anywhere in the file, so this
+    // cannot be decided while parsing.
+    //
+    modbusmq_config_apply_format_version(modbusmq_config, filename);
 
     //
     // A coil or discrete input carries one bit per address, so its channels
