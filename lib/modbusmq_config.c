@@ -82,6 +82,26 @@ config_handle_value(char **value)
 //////////////////////////////////////////////////////////////////////////////
 // 
 //
+//////////////////////////////////////////////////////////////////////////////
+//
+// Replace a config string, keeping the last value seen.
+//
+// Repeating a key is deliberate and supported: it lets a config override an
+// earlier value further down the file. Only the old string needs releasing on
+// the way past, which is what this is for.
+//
+static void
+config_set_string(char **dst, const char *value)
+{
+    if (!dst)
+    {
+        return;
+    }
+
+    free(*dst);          // NULL on the first assignment, which free() accepts
+    *dst = strdup(value);
+}
+
 void
 modbusmq_config_debug_print(const char *key, const char *value, int line_num)
 {
@@ -393,15 +413,15 @@ modbusmq_config_parse(const char *filename)
 
         if (strcmp(key, "config.name") == 0)
         {
-            modbusmq_config->config_name = strdup(value);
+            config_set_string(&modbusmq_config->config_name, value);
         }
         else if (strcmp(key, "config.version") == 0)
         {
-            modbusmq_config->config_version = strdup(value);
+            config_set_string(&modbusmq_config->config_version, value);
         }
         else if (strcmp(key, "modbusmq.connect") == 0)
         {
-            modbusmq_config->modbusmq_connect = strdup(value);
+            config_set_string(&modbusmq_config->modbusmq_connect, value);
         }
         else if (strcmp(key, "modbusmq.baudrate") == 0)
         {
@@ -448,7 +468,8 @@ modbusmq_config_parse(const char *filename)
         {
             if (modbusmq_config->inputs)
             {
-                fprintf(stderr, "%d: %s listed more than once\n", line_num, key);
+                fprintf(stderr, "%d: %s listed more than once. The array is allocated when this key is read, "
+                                "so a second one would discard everything already parsed into the first.\n", line_num, key);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -535,7 +556,8 @@ modbusmq_config_parse(const char *filename)
             {
                 if (input->channels)
                 {
-                    fprintf(stderr, "%d: %s listed more than once\n", line_num, key);
+                    fprintf(stderr, "%d: %s listed more than once. The array is allocated when this key is read, "
+                                "so a second one would discard everything already parsed into the first.\n", line_num, key);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -617,7 +639,7 @@ modbusmq_config_parse(const char *filename)
                 }
                 else if (strcmp(channel_key, "topic") == 0)
                 {
-                    channel->topic = strdup(value);
+                    config_set_string(&channel->topic, value);
                 }
                 else if (strcmp(channel_key, "value") == 0)
                 {
@@ -638,7 +660,8 @@ modbusmq_config_parse(const char *filename)
         {
             if (modbusmq_config->writes)
             {
-                fprintf(stderr, "%d: %s listed more than once\n", line_num, key);
+                fprintf(stderr, "%d: %s listed more than once. The array is allocated when this key is read, "
+                                "so a second one would discard everything already parsed into the first.\n", line_num, key);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -696,7 +719,7 @@ modbusmq_config_parse(const char *filename)
 
             if (strcmp(write_key, "name") == 0)
             {
-                write->name = strdup(value);
+                config_set_string(&write->name, value);
             }
             else if (strcmp(write_key, "slave") == 0)
             {
@@ -782,7 +805,7 @@ modbusmq_config_parse(const char *filename)
             }
             else if (strcmp(write_key, "topic") == 0)
             {
-                write->topic = strdup(value);
+                config_set_string(&write->topic, value);
             }
             else
             {
@@ -792,15 +815,15 @@ modbusmq_config_parse(const char *filename)
         }
         else if (strcmp(key, "mqtt.name") == 0)
         {
-            modbusmq_config->mqtt_name = strdup(value);
+            config_set_string(&modbusmq_config->mqtt_name, value);
         }
         else if (strcmp(key, "mqtt.connect") == 0)
         {
-            modbusmq_config->mqtt_connect = strdup(value);
+            config_set_string(&modbusmq_config->mqtt_connect, value);
         }
         else if (strcmp(key, "mqtt.topic_prefix") == 0)
         {
-            modbusmq_config->mqtt_topic_prefix = strdup(value);
+            config_set_string(&modbusmq_config->mqtt_topic_prefix, value);
         }
         else
         {

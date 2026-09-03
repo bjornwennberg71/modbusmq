@@ -7,6 +7,17 @@ Config files use a simple `key = value` format. `#` starts a comment — everyth
 modbusmq.connect = tcp://192.168.1.50:502   # inline comment also works
 ```
 
+## Repeating a key
+
+**The last value wins.** Setting a key twice is supported, not a mistake — it lets a file carry a default and override it further down, or keep an alternative visible next to the one in use rather than deleting it:
+
+```
+modbusmq.connect = tcp://192.168.1.50:502
+modbusmq.connect = tcp://localhost:1502     # testing against the virtual server
+```
+
+The second line is the one that takes effect. This works for every key **except the three that allocate**: `input.max`, `write.max` and `input.N.channel.max`. Those are refused with an error, because the arrays are built the moment the key is read and a second one would discard everything already parsed into the first.
+
 ---
 
 ## Connection
@@ -390,6 +401,7 @@ mqtt.connect = mqtt://localhost:1883
 
 ## Common pitfalls
 
+- **A repeated key takes its last value**, except `input.max`, `write.max` and `input.N.channel.max`, which are an error.
 - **`write.max` must appear before any `write.N.*` key**, and a `write.N` beyond `write.max` is a hard error rather than a silent skip.
 - **`input.max` must appear before any `input.N.*` key.** Same for `input.N.channel.max` before channel keys. The parser allocates memory when it sees these declarations; later keys that reference out-of-range indices are silently skipped.
 - **`input.query_mode` must appear before `input.N.*` keys** for the mode to take effect when building the timer list.
