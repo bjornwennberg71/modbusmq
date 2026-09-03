@@ -294,9 +294,19 @@ modbusmq_tcp_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 {
     int
         rc;
+    //
+    // Size the frame from the MBAP length field rather than assuming one.
+    //
+    // This used to start at a flat 12 bytes. A client got away with it because
+    // modbusmq_tcp_msg_check_header() re-sizes the reader from the same field
+    // once the header is in — but nothing calls check_header on an incoming
+    // *request*, so a server read exactly 12 bytes of every request. A write
+    // of multiple registers is 13 + 2*n, and the remainder stayed in the
+    // socket to be misread as the head of the next frame.
+    //
     if (frame->length == 0)
     {
-        frame->length = 12;
+        frame->length = 6; // transaction(2) + protocol(2) + length(2)
     }
 
     if (frame->length <= frame->xmit || frame->length > MODBUSMQ_FRAME_MAX)
@@ -308,7 +318,6 @@ modbusmq_tcp_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
     rc = read(fd, frame->buf + frame->xmit, frame->length - frame->xmit);
 
-    
     if (rc < 0)
     {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -319,6 +328,27 @@ modbusmq_tcp_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
     else
     {
         frame->xmit += rc;
+
+        //
+        // Refine the length here rather than on the next call. The caller
+        // decides the frame is complete the moment xmit reaches length, so a
+        // guess left standing for even one call is acted on as if it were the
+        // real thing.
+        //
+        if (frame->xmit >= 6)
+        {
+            int
+                declared = 6 + ((frame->buf[4] << 8) | frame->buf[5]);
+
+            if (declared < 8 || declared > MODBUSMQ_FRAME_MAX)
+            {
+                modbusmq_logf(LOG_ERROR, "modbusmq_tcp_read: frame declares an unusable length of %d bytes\n", declared);
+                errno = EINVAL;
+                return -1;
+            }
+
+            frame->length = declared;
+        }
     }
     modbusmq_tcp_frame_check(context, frame);
     
