@@ -15,8 +15,8 @@
 // DEFINES ///////////////////////////////////////////////////////////////////
 
 #define MODBUSMQ_VERSION_MAJOR 2
-#define MODBUSMQ_VERSION_MINOR 0
-#define MODBUSMQ_VERSION_BUILD 1
+#define MODBUSMQ_VERSION_MINOR 1
+#define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
 #define MODBUSMQ_STRINGIFY(x)  MODBUSMQ_STRINGIFY_(x)
@@ -60,6 +60,7 @@ extern "C" {
     // FORWARD DECL
 struct modbusmq_input_t;
 struct modbusmq_channel_t;
+struct modbusmq_write_t;
 
 //
 // contains data to send or receive
@@ -144,9 +145,19 @@ extern int  modbusmq_get_debug(void);
 extern const char *modbusmq_strerror(int nerrno);
 
     // modbusmq messages
-extern int  modbusmq_frame_write_bit(           struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int value);
-extern int  modbusmq_frame_write_bits(          struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits, const uint8_t *bits);
-extern int  modbusmq_frame_read_bits(           struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits);
+    //
+    // Function 05, write single coil. addr is a coil address, value is treated
+    // as a boolean and encoded as the protocol's 0xFF00 / 0x0000.
+    //
+extern int  modbusmq_frame_write_coil_bit(      struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int value);
+    //
+    // Function 15, write multiple coils. bits is one byte per coil, non-zero
+    // meaning on — not packed bits. nbits is 1..1968.
+    //
+extern int  modbusmq_frame_write_coil_bits(     struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits, const uint8_t *bits);
+    // Function 01, read coils
+extern int  modbusmq_frame_read_coil_bits(      struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits);
+    // Function 02, read discrete inputs
 extern int  modbusmq_frame_read_input_bits(     struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits);
 extern int  modbusmq_frame_write_register(      struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int value);
 extern int  modbusmq_frame_write_registers(     struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int naddr, const uint16_t *values);
@@ -192,6 +203,10 @@ extern const char *modbusmq_msg_tag(struct modbusmq_context_t *context, modbusmq
 //
 extern int   modbusmq_read_int16_ab(const uint8_t *data);
 extern int   modbusmq_read_int16_ba(const uint8_t *data);
+    // signed two's-complement counterparts; the unsigned ones above turn a
+    // negative reading into a large positive number
+extern int   modbusmq_read_int16_ab_signed(const uint8_t *data);
+extern int   modbusmq_read_int16_ba_signed(const uint8_t *data);
 extern int   modbusmq_read_int32_abcd(const uint8_t *data);
 extern int   modbusmq_read_int32_badc(const uint8_t *data);
 extern float modbusmq_read_float_abcd(const uint8_t *data);
@@ -200,6 +215,20 @@ extern float modbusmq_read_float_dcba(const uint8_t *data);
 extern float modbusmq_read_channel(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel);
 // 0 when the channel lies inside the received data, < 0 (and logged) when it does not
 extern int   modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel);
+
+    //
+    // Encode a raw value as wire bytes for a data format. No scaling: the
+    // value is already a register value. out needs 4 bytes.
+    // Returns bytes written, < 0 for a format that cannot be encoded.
+    //
+extern int   modbusmq_encode_value(int format, double value, uint8_t *out);
+    //
+    // Undo a write entry's add/mod/mul and encode the result into up to two
+    // registers in wire order — the exact inverse of modbusmq_read_channel().
+    // Rejects values that do not fit the format rather than truncating them.
+    // Returns the register count (1 or 2), < 0 on error. Not for coil writes.
+    //
+extern int   modbusmq_write_encode(struct modbusmq_context_t *context, const struct modbusmq_write_t *write, double value, uint16_t *regs);
 
 extern void  modbusmq_write_int16_ab(uint8_t *data, uint16_t value);
 extern void  modbusmq_write_int32_abcd(uint8_t *data, uint32_t value);

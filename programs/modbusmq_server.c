@@ -396,81 +396,6 @@ modbusmq_server(modbusmq_context_t *context)
 
 //////////////////////////////////////////////////////////////////////////////
 //
-// Encode channel->value into `out` according to channel->format/length.
-// Mirrors the byte orderings used by modbusmq_read_channel() in modbusmq.c,
-// just in reverse (float/int -> wire bytes instead of wire bytes -> value).
-//
-// @return number of bytes written (2 or 4), or 0 for an unhandled format
-int
-modbusmq_encode_channel_value(const modbusmq_channel_t *channel, uint8_t *out)
-{
-    if (channel->length == 4)
-    {
-        uint32_t i;
-
-        switch (channel->format)
-        {
-            case ModbusmqDataFormat_float_abcd:
-            case ModbusmqDataFormat_float_badc:
-            case ModbusmqDataFormat_float_dcba:
-            case ModbusmqDataFormat_float_cdab:
-            {
-                float f = channel->value;
-                memcpy(&i, &f, 4);
-                break;
-            }
-            case ModbusmqDataFormat_abcd:
-            case ModbusmqDataFormat_badc:
-                i = (uint32_t)(int32_t)channel->value;
-                break;
-            default:
-                return 0;
-        }
-
-        uint8_t a = (i >> 24) & 0xff, b = (i >> 16) & 0xff, c = (i >> 8) & 0xff, d = i & 0xff;
-
-        switch (channel->format)
-        {
-            case ModbusmqDataFormat_float_abcd:
-            case ModbusmqDataFormat_abcd:
-                out[0] = a; out[1] = b; out[2] = c; out[3] = d;
-                break;
-            case ModbusmqDataFormat_float_badc:
-            case ModbusmqDataFormat_badc:
-                out[1] = a; out[0] = b; out[3] = c; out[2] = d;
-                break;
-            case ModbusmqDataFormat_float_dcba:
-                out[3] = a; out[2] = b; out[1] = c; out[0] = d;
-                break;
-            case ModbusmqDataFormat_float_cdab:
-                out[2] = a; out[3] = b; out[0] = c; out[1] = d;
-                break;
-            default:
-                return 0;
-        }
-        return 4;
-    }
-    else if (channel->length == 1)
-    {
-        out[0] = (uint8_t)((int)channel->value & 0xff);
-        return 1;
-    }
-    else
-    {
-        int value = (int)channel->value;
-        switch (channel->format)
-        {
-            case ModbusmqDataFormat_ab: out[0] = (value >> 8) & 0xff; out[1] = value & 0xff; break;
-            case ModbusmqDataFormat_ba: out[1] = (value >> 8) & 0xff; out[0] = value & 0xff; break;
-            default:
-                return 0;
-        }
-        return 2;
-    }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-//
 // We have received a complete request in connection.msg.req
 // Now create a response and place it in connection.msg.res
 int
@@ -506,13 +431,79 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
         // MODBUSMQ_FRAME_MAX response buffer (client-controlled naddress
         // used to be trusted unchecked here, which allowed a single crafted
         // request to overflow res->buf).
-        if (naddress <= 0 || naddress > 125)
+        //
+        // Coils and discrete inputs answer with one bit per address packed
+        // eight to a byte, so they need their own limit and their own payload
+        // shape. Modbus caps them at 2000 per request.
+        //
+        int
+            is_bit = (function == ModbusmqType_Coil || function == ModbusmqType_DiscreteInput);
+
+        if (naddress <= 0 || naddress > (is_bit ? 2000 : 125))
         {
             res->buf[7]  = function | 0x80; // exception response
             res->buf[8]  = 0x03;            // illegal data value
             res->buf[4]  = 0;
             res->buf[5]  = 3;
             res->length  = 9;
+            return 0;
+        }
+
+        if (is_bit)
+        {
+            int
+                nb = (naddress + 7) / 8;
+
+            memset(&res->buf[9], 0, nb);
+
+            for(int i = 0; i < config->input_max; ++i)
+            {
+                modbusmq_input_t
+                    *input = &config->inputs[i];
+
+                if (input->slave != slave_id || input->type != function)
+                {
+                    continue;
+                }
+
+                for(int c = 0; c < input->channel_max; ++c)
+                {
+                    modbusmq_channel_t
+                        *channel = &input->channels[c];
+
+                    if (!channel->topic)
+                    {
+                        continue; // an unused channel slot
+                    }
+
+                    //
+                    // channel->offset is a coil index for a bit input, so the
+                    // coil's position in this response is its absolute address
+                    // minus where the request started.
+                    //
+                    int
+                        icoil = (input->address + channel->offset) - address_start;
+
+                    if (icoil < 0 || icoil >= naddress)
+                    {
+                        continue; // outside what was asked for
+                    }
+
+                    if (channel->value != 0)
+                    {
+                        res->buf[9 + (icoil / 8)] |= 1 << (icoil % 8);
+                    }
+
+                    printf("default_value: coil %d = %d\n",
+                           input->address + channel->offset, channel->value != 0);
+                }
+            }
+
+            res->buf[8] = nb;                       // byte count
+            res->buf[4] = ((nb + 3) & 0xff00) >> 8; // payload length
+            res->buf[5] =  (nb + 3) & 0x00ff;
+            res->length = nb + 3 + 6;               // + 6 byte header
+
             return 0;
         }
 
@@ -564,7 +555,7 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
                     // input.1.channel.1.mod     = -1000
                     // input.1.channel.1.topic   = voltage_nominal
 
-                    int encoded = modbusmq_encode_channel_value(channel, &res->buf[9 + write]);
+                    int encoded = modbusmq_encode_value(channel->format, channel->value, &res->buf[9 + write]);
                     if (encoded > 0)
                     {
                         write        += encoded;

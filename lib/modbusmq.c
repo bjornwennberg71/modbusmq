@@ -14,6 +14,7 @@
 
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
@@ -462,6 +463,26 @@ modbusmq_reset_queue(modbusmq_context_t *context)
     while (elem)
     {
         modbusmq_msg_wrapper_t *next = elem->next;
+
+        //
+        // Report each one on the way out instead of freeing it quietly.
+        //
+        // These are requests that were accepted and never sent. For a poll
+        // that is harmless — the next cycle asks again. For a write it is
+        // not: the caller was told the setpoint was queued, the device never
+        // received it, and nothing anywhere said so. A dropped command has to
+        // be as visible as one that timed out.
+        //
+        // The request that was in flight when the link died has already been
+        // reported by the loop, so skip it rather than report it twice.
+        //
+        if (!elem->reported)
+        {
+            modbusmq_logf(LOG_ERROR, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
+                          modbusmq_msg_tag(context, &elem->msg));
+            modbusmq_report_error(context, &elem->msg, MODBUSMQ_ERR_TRANSPORT);
+        }
+
         free(elem);
         elem = next;
     }
@@ -579,6 +600,36 @@ int
 modbusmq_read_int16_ab(const uint8_t *data)
 {
     return (data[0] << 8 | data[1]);
+}
+
+/**
+ *
+ * @brief reads 2 bytes, high byte first, as a signed two's-complement value
+ *
+ * The signed counterpart of modbusmq_read_int16_ab(). Devices that report
+ * temperatures need this: read unsigned, an ambient of -5.0 C arrives as
+ * 65486 and scales to 6548.6 C rather than -5.0.
+ *
+ * @param data: 2 bytes
+ * @return converted value, -32768..32767
+ */
+int
+modbusmq_read_int16_ab_signed(const uint8_t *data)
+{
+    return (int16_t)((uint16_t)data[0] << 8 | data[1]);
+}
+
+/**
+ *
+ * @brief reads 2 bytes, low byte first, as a signed two's-complement value
+ *
+ * @param data: 2 bytes
+ * @return converted value, -32768..32767
+ */
+int
+modbusmq_read_int16_ba_signed(const uint8_t *data)
+{
+    return (int16_t)((uint16_t)data[1] << 8 | data[0]);
 }
 
 /**
@@ -724,7 +775,7 @@ modbusmq_read_float_cdab(const uint8_t *data)
  *
  * @return size in bytes
  */
-static int
+int
 modbusmq_format_size(int format)
 {
     switch (format)
@@ -733,6 +784,8 @@ modbusmq_format_size(int format)
         return 1;
     case ModbusmqDataFormat_ab:
     case ModbusmqDataFormat_ba:
+    case ModbusmqDataFormat_int16_ab:
+    case ModbusmqDataFormat_int16_ba:
     case ModbusmqDataFormat_float_ba:
         return 2;
     default:
@@ -768,6 +821,29 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
         *config = modbusmq_config_get();
     int
         nbytes = modbusmq_frame_nbytes(context, &msg->frame[1]);
+
+    //
+    // For a coil or discrete input, channel->offset counts coils rather than
+    // bytes — the natural unit of that address space, the same way it counts
+    // bytes for a register block. One response byte carries eight of them.
+    //
+    if (MODBUSMQ_TYPE_IS_BIT(input->type))
+    {
+        int
+            bit = channel->offset - input->address_offset;
+
+        if (bit < 0 || nbytes < 0 || (bit / 8) >= nbytes)
+        {
+            modbusmq_logf(LOG_ERROR, "%s channel %s: coil %d is outside the %d coils received. action: skip channel\n",
+                          modbusmq_msg_tag(context, msg),
+                          channel->topic ? channel->topic : "?",
+                          bit, nbytes * 8);
+            return -1;
+        }
+
+        return 0;
+    }
+
     int
         offset = (channel->offset - input->address_offset) * (config ? config->offset_size : 1);
     int
@@ -817,22 +893,42 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
         return 0;
     }
 
-    switch(channel->format)
+    //
+    // A bit is not a number in a format, so it never reaches the format switch
+    // below. Modbus packs coils eight to a byte, lowest address in the lowest
+    // bit — so coil N of the response is bit N%8 of byte N/8.
+    //
+    // Scaling still applies: mul=-1 or add=1 is how an active-low alarm gets
+    // published the right way round without a second config key for it.
+    //
+    if (MODBUSMQ_TYPE_IS_BIT(input->type))
     {
+        int
+            bit = channel->offset - input->address_offset;
+
+        f = (data[bit / 8] >> (bit % 8)) & 0x01;
+    }
+    else
+    {
+        switch(channel->format)
+        {
         case ModbusmqDataFormat_float_abcd:  f = modbusmq_read_float_abcd(data + offset); break;
         case ModbusmqDataFormat_float_badc:  f = modbusmq_read_float_badc(data + offset); break;
         case ModbusmqDataFormat_float_dcba:  f = modbusmq_read_float_dcba(data + offset); break;
         case ModbusmqDataFormat_float_cdab:  f = modbusmq_read_float_cdab(data + offset); break;
         case ModbusmqDataFormat_ab:          f = modbusmq_read_int16_ab(data + offset);  value_len = 2; break;
         case ModbusmqDataFormat_ba:          f = modbusmq_read_int16_ba(data + offset); value_len = 2;break;
+        case ModbusmqDataFormat_int16_ab:    f = modbusmq_read_int16_ab_signed(data + offset); value_len = 2; break;
+        case ModbusmqDataFormat_int16_ba:    f = modbusmq_read_int16_ba_signed(data + offset); value_len = 2; break;
         case ModbusmqDataFormat_abcd:        f = modbusmq_read_int32_abcd(data + offset); break;
         case ModbusmqDataFormat_badc:        f = modbusmq_read_int32_badc(data + offset); break;
         default:
-            modbusmq_logf(LOG_ERROR, "Unhandled data format: %d\n", (int)channel->format);
-            assert(0);
-            break;
+            modbusmq_logf(LOG_ERROR, "channel %s: unhandled data format %d. action: skip channel\n",
+                          channel->topic ? channel->topic : "?", (int)channel->format);
+            return 0;
+        }
     }
-    
+
     f = (f + channel->add);
     if (channel->mod > 0)
     {
@@ -850,6 +946,254 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
     }
     
     return f;
+}
+
+/**
+ *
+ * @brief encode a raw value into wire bytes according to a data format
+ *
+ * The exact reverse of the byte orderings modbusmq_read_channel() decodes, and
+ * nothing more: no scaling is applied here, so the value passed in is already a
+ * raw register value. modbusmq_write_encode() is the one that undoes add/mod/mul;
+ * modbusmq_server uses this directly to lay out its default values.
+ *
+ * @param format: one of enum ModbusmqDataFormat
+ * @param value : raw value to encode
+ * @param out   : at least 4 bytes of caller storage
+ *
+ * @return bytes written (1, 2 or 4), < 0 for a format that cannot be encoded
+ */
+int
+modbusmq_encode_value(int format, double value, uint8_t *out)
+{
+    if (!out)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int
+        length = modbusmq_format_size(format);
+
+    if (length == 1)
+    {
+        out[0] = (uint8_t)((int)value & 0xff);
+        return 1;
+    }
+
+    if (length == 2)
+    {
+        int
+            ivalue = (int)(int64_t)value;
+
+        switch (format)
+        {
+        case ModbusmqDataFormat_ab:
+        case ModbusmqDataFormat_int16_ab: out[0] = (ivalue >> 8) & 0xff; out[1] = ivalue & 0xff; break;
+        case ModbusmqDataFormat_ba:
+        case ModbusmqDataFormat_int16_ba: out[1] = (ivalue >> 8) & 0xff; out[0] = ivalue & 0xff; break;
+        default:
+            return -1;
+        }
+        return 2;
+    }
+
+    if (length == 4)
+    {
+        uint32_t
+            i;
+
+        switch (format)
+        {
+        case ModbusmqDataFormat_float_abcd:
+        case ModbusmqDataFormat_float_badc:
+        case ModbusmqDataFormat_float_dcba:
+        case ModbusmqDataFormat_float_cdab:
+        {
+            float f = value;
+            memcpy(&i, &f, 4);
+            break;
+        }
+        case ModbusmqDataFormat_abcd:
+        case ModbusmqDataFormat_badc:
+            i = (uint32_t)(int64_t)value;
+            break;
+        default:
+            return -1;
+        }
+
+        uint8_t
+            a = (i >> 24) & 0xff,
+            b = (i >> 16) & 0xff,
+            c = (i >>  8) & 0xff,
+            d =  i        & 0xff;
+
+        switch (format)
+        {
+        case ModbusmqDataFormat_float_abcd:
+        case ModbusmqDataFormat_abcd:
+            out[0] = a; out[1] = b; out[2] = c; out[3] = d;
+            break;
+        case ModbusmqDataFormat_float_badc:
+        case ModbusmqDataFormat_badc:
+            out[1] = a; out[0] = b; out[3] = c; out[2] = d;
+            break;
+        case ModbusmqDataFormat_float_dcba:
+            out[3] = a; out[2] = b; out[1] = c; out[0] = d;
+            break;
+        case ModbusmqDataFormat_float_cdab:
+            out[2] = a; out[3] = b; out[0] = c; out[1] = d;
+            break;
+        default:
+            return -1;
+        }
+        return 4;
+    }
+
+    return -1;
+}
+
+/**
+ *
+ * @brief undo a write entry's scaling and encode the result as Modbus registers
+ *
+ * The exact inverse of modbusmq_read_channel(), applied in reverse order: that
+ * function computes (raw + add), then mod, then mul, so this one undoes mul,
+ * then mod, then add. The order matters — add lands before scaling, not after.
+ *
+ * Arithmetic is done in double rather than float so that a 32-bit raw value
+ * survives the round trip; float runs out of mantissa above 2^24.
+ *
+ * Out-of-range values are rejected rather than truncated. A setpoint that
+ * silently wraps to a small number is worse than one that never gets written,
+ * because the device accepts it without complaint.
+ *
+ * Not for coil writes: a coil carries no format and no scaling, so
+ * modbusmq_frame_write_coil_bit() takes the on/off decision directly.
+ *
+ * @param context: allocated context (for logging only)
+ * @param write  : write entry supplying format and scaling
+ * @param value  : the value as published, in engineering units
+ * @param regs   : filled with up to 2 register values in wire order
+ *
+ * @return number of registers to write (1 or 2), < 0 on error
+ */
+int
+modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write, double value, uint16_t *regs)
+{
+    if (!context || !write || !regs)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const char
+        *name = write->name ? write->name : (write->topic ? write->topic : "?");
+
+    if (!isfinite(value))
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: value is not a finite number. action: skip write\n", name);
+        return -1;
+    }
+
+    //
+    // reverse of modbusmq_read_channel(): mul, then mod, then add
+    //
+    double
+        raw = value;
+
+    if (write->mul != 0)
+    {
+        raw /= write->mul;
+    }
+    if (write->mod > 0)
+    {
+        raw /= write->mod;
+    }
+    else if (write->mod < 0)
+    {
+        raw *= -(double)write->mod;
+    }
+    raw -= write->add;
+
+    int
+        is_float = (write->format == ModbusmqDataFormat_float_abcd ||
+                    write->format == ModbusmqDataFormat_float_badc ||
+                    write->format == ModbusmqDataFormat_float_dcba ||
+                    write->format == ModbusmqDataFormat_float_cdab);
+
+    if (!is_float)
+    {
+        double
+            lo, hi;
+
+        switch (write->format)
+        {
+        case ModbusmqDataFormat_int16_ab:
+        case ModbusmqDataFormat_int16_ba:
+            lo = -32768.0;      hi = 32767.0;
+            break;
+        case ModbusmqDataFormat_ab:
+        case ModbusmqDataFormat_ba:
+            //
+            // modbusmq_read_int16_ab()/_ba() do not sign-extend, so these read
+            // back as 0..65535. Accept the signed range too and let it wrap
+            // into the same 16 bits, but refuse what fits neither reading.
+            //
+            lo = -32768.0;      hi = 65535.0;
+            break;
+        default:
+            lo = -2147483648.0; hi = 4294967295.0;
+            break;
+        }
+
+        //
+        // Round rather than truncate: 25.5 C scaled by mod=-10 comes out as
+        // 254.99999... in binary floating point and must not become 254.
+        //
+        // Guarded before the cast, not after: a double far outside the range
+        // has no defined conversion to int64_t, so anything that cannot
+        // possibly round into range is left alone for the check below to
+        // reject. Done with a cast rather than floor() so the library does
+        // not need libm for one rounding.
+        //
+        if (raw >= lo - 1.0 && raw <= hi + 1.0)
+        {
+            raw = (raw < 0) ? -(double)(int64_t)(-raw + 0.5)
+                            :  (double)(int64_t)( raw + 0.5);
+        }
+
+        if (raw < lo || raw > hi)
+        {
+            modbusmq_logf(LOG_ERROR, "write %s: value %.6g scales to raw %.6g, outside [%.0f..%.0f] for this format. action: skip write\n",
+                          name, value, raw, lo, hi);
+            return -1;
+        }
+    }
+
+    uint8_t
+        buf[4] = {0};
+    int
+        nbytes = modbusmq_encode_value(write->format, raw, buf);
+
+    if (nbytes != 2 && nbytes != 4)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: format %d cannot be written\n", name, (int)write->format);
+        return -1;
+    }
+
+    //
+    // The bytes are already in wire order, so pack them into registers as they
+    // lie — that is what makes int_ba and the mixed-endian float layouts come
+    // out right without a second byte-order table here.
+    //
+    regs[0] = (uint16_t)((buf[0] << 8) | buf[1]);
+    if (nbytes == 4)
+    {
+        regs[1] = (uint16_t)((buf[2] << 8) | buf[3]);
+    }
+
+    return nbytes / 2;
 }
 
 /**
@@ -1410,38 +1754,71 @@ modbusmq_frame_write_register(modbusmq_context_t *context, modbusmq_frame_t *fra
 int
 modbusmq_frame_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits, const uint8_t *bits)
 {
-    if (!context || !frame)
+    if (!context || !frame || !bits)
     {
         errno = EINVAL;
         return -1;
     }
-    
+
+    //
+    // Modbus caps a single coil write at 1968 coils (246 payload bytes). The
+    // cap also keeps the packing loop below inside frame->buf, which is
+    // MODBUSMQ_FRAME_MAX and was previously written without any bound.
+    //
+    if (nbits <= 0 || nbits > 1968)
+    {
+        modbusmq_logf(LOG_ERROR, "write coils: %d coils is outside 1..1968\n", nbits);
+        errno = EINVAL;
+        return -1;
+    }
+
     int
-        nb = (nbits / 8) + (nbits%8 ? 1 : 0);
-    
+        nb = (nbits / 8) + (nbits % 8 ? 1 : 0);
+
     context->cb.modbusmq_write_coil_bits(context, frame, addr, nbits, bits);
+
+    if (frame->length + 1 + nb > MODBUSMQ_FRAME_MAX)
+    {
+        modbusmq_logf(LOG_ERROR, "write coils: %d coils does not fit a frame\n", nbits);
+        errno = EINVAL;
+        return -1;
+    }
 
     // number of bytes
     frame->buf[frame->length++] = nb;
 
     //
-    // here comes the bits as characters
-    // "11110000" => 0xcd
+    // One byte of `bits` per coil, non-zero meaning on — the same shape
+    // libmodbus uses, and far easier to get right than hand-packed bits.
     //
-
+    // Packed low bit first: Modbus numbers coils from the least significant
+    // bit up, so the coil at `addr` is bit 0 of the first byte. This used to
+    // pack from the high bit down, which set entirely the wrong coils.
+    //
+    // The loop is bounded by nbits rather than by nb*8. Running the inner loop
+    // a full 8 times per byte read past the end of the caller's array whenever
+    // nbits was not a multiple of 8 — three coils read eight bytes.
+    //
     for(int ibyte = 0; ibyte < nb; ++ibyte)
     {
         uint8_t
             byte = 0;
+
         for(int ibit = 0; ibit < 8; ++ibit)
         {
-            byte |= (*bits++ != '0' ? 1 : 0) << (7-ibit);
+            int
+                icoil = ibyte * 8 + ibit;
+
+            if (icoil >= nbits)
+            {
+                break; // trailing bits of the last byte are padding, and zero
+            }
+
+            byte |= (bits[icoil] ? 1 : 0) << ibit;
         }
+
         frame->buf[frame->length++] = byte;
     }
-
-    // header[*] + address[2] + nb[2] 
-    //frame->res_length = context->header_length + 2 + 2;
 
     return frame->length;
 }
@@ -1473,7 +1850,26 @@ modbusmq_frame_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fr
         return -1;
     }
     
+    //
+    // Modbus caps a single register write at 123 registers, which also keeps
+    // the copy below inside frame->buf. naddr is caller-supplied and used to
+    // be trusted unchecked.
+    //
+    if (naddr <= 0 || naddr > 123 || !values)
+    {
+        modbusmq_logf(LOG_ERROR, "write registers: %d registers is outside 1..123\n", naddr);
+        errno = EINVAL;
+        return -1;
+    }
+
     context->cb.modbusmq_write_registers(context, frame, addr, naddr, values);
+
+    if (frame->length + 1 + naddr * 2 > MODBUSMQ_FRAME_MAX)
+    {
+        modbusmq_logf(LOG_ERROR, "write registers: %d registers does not fit a frame\n", naddr);
+        errno = EINVAL;
+        return -1;
+    }
 
     // data-length: is number of records * 2 
     frame->buf[frame->length++] = naddr*2; 
@@ -2895,6 +3291,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         modbusmq_logf(LOG_ERROR, "%s transport error rc=%d, err=%s\n",
                       modbusmq_msg_tag(context, &wrapper->msg), rc, strerror(errno));
         modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TRANSPORT);
+        wrapper->reported = 1;
     }
     else if (rc > 0)
     {

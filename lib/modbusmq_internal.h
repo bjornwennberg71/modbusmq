@@ -36,6 +36,14 @@ extern "C" {
 typedef struct modbusmq_msg_wrapper_t
 {
     int                   flags;
+
+                          // Set once an error has been reported for this
+                          // request. A transport error reports the head of the
+                          // queue and then leaves it there for the caller to
+                          // reset, so without this the reset reports it again
+                          // and the caller sees one failure twice.
+    uint8_t               reported;
+
     modbusmq_msg_t          msg;
     struct modbusmq_msg_wrapper_t *next;
 } modbusmq_msg_wrapper_t;
@@ -162,6 +170,8 @@ extern int modbusmq_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *
 extern int modbusmq_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame);
 
 extern int modbusmq_frame_incomplete(modbusmq_context_t *context, modbusmq_frame_t *frame);
+
+extern int modbusmq_format_size(int format);
 
 #ifdef __cplusplus
 }

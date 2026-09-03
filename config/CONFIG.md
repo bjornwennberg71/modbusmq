@@ -90,11 +90,53 @@ Replace `N` with the input number (1-based).
 
 ```
 input.N.slave          = 39               # Modbus slave / device ID
-input.N.type           = input_register   # input_register or holding_register
+input.N.type           = input_register   # see the table below
 input.N.address        = 0x0FFF           # start register address (hex or decimal)
 input.N.naddress       = 0x27             # number of registers to read
 input.N.interval       = 1000             # polling interval in milliseconds
 input.N.channel.max    = 13               # number of channels — must come before channel keys
+```
+
+| type               | Modbus | Reads                    | `naddress` counts | `channel.offset` is |
+|--------------------|--------|--------------------------|-------------------|---------------------|
+| `holding_register` | 03     | read/write registers     | registers         | bytes               |
+| `input_register`   | 04     | read-only registers      | registers         | bytes               |
+| `coil`             | 01     | read/write bits          | coils             | a coil index        |
+| `discrete_input`   | 02     | read-only bits           | inputs            | a bit index         |
+
+---
+
+## Bit inputs: coils and discrete inputs
+
+A `coil` or `discrete_input` block polls bits rather than registers. The device answers with them packed eight to a byte, lowest address in the lowest bit.
+
+Because the unit of that address space is a bit, `channel.offset` counts **coils, not bytes** — the same idea as a register block, where it counts bytes. Coil 9 is byte 1, bit 1; you do not work that out yourself.
+
+A bit channel takes **no `format`** — there is nothing to decode. Setting one is a config error, because it almost always means the block was written against the wrong address space.
+
+```
+# DBS aircon alarms, read as discrete inputs
+input.2.slave       = 39
+input.2.type        = discrete_input
+input.2.address     = 0x0000
+input.2.naddress    = 16                  # 16 bits
+input.2.interval    = 2000
+input.2.channel.max = 2
+
+input.2.channel.1.offset = 0              # the bit at address 0x0000
+input.2.channel.1.topic  = alarms/high_temperature
+
+input.2.channel.2.offset = 9              # the bit at address 0x0009
+input.2.channel.2.topic  = alarms/door_open
+```
+
+A bit publishes as `1.000` or `0.000`. Scaling still applies, which is how an **active-low** signal is turned the right way round without a key of its own:
+
+```
+input.2.channel.3.offset = 1
+input.2.channel.3.add    = -1             # 0 -> -1, 1 -> 0
+input.2.channel.3.mul    = -1             # -1 -> 1,  0 -> 0
+input.2.channel.3.topic  = status/ok
 ```
 
 ---
@@ -126,8 +168,10 @@ Only `offset`, `format`, and `topic` are required. `add`, `mod`, `mul`, and `val
 | Format        | Size   | Description                          |
 |---------------|--------|--------------------------------------|
 | `int_a`       | 1 byte | unsigned 8-bit                       |
-| `int_ab`      | 2 bytes | 16-bit, big-endian (most common)    |
-| `int_ba`      | 2 bytes | 16-bit, little-endian               |
+| `int_ab`      | 2 bytes | 16-bit unsigned, big-endian (most common) |
+| `int_ba`      | 2 bytes | 16-bit unsigned, little-endian      |
+| `int16`       | 2 bytes | 16-bit **signed**, big-endian       |
+| `int16_ba`    | 2 bytes | 16-bit **signed**, little-endian    |
 | `int_abcd`    | 4 bytes | 32-bit, big-endian                  |
 | `int_badc`    | 4 bytes | 32-bit, mixed-endian (BADC)         |
 | `float_abcd`  | 4 bytes | IEEE 754 float, big-endian          |
@@ -135,6 +179,8 @@ Only `offset`, `format`, and `topic` are required. `add`, `mod`, `mul`, and `val
 | `float_dcba`  | 4 bytes | IEEE 754 float, little-endian       |
 
 When in doubt, start with `int_ab` — it is the most common encoding for Modbus devices.
+
+**Use `int16`, not `int_ab`, for anything that can go negative.** `int_ab` and `int_ba` do not sign-extend: they read 0..65535. A temperature of −5.0 °C arrives on the wire as `0xFFCE`, which `int_ab` decodes as 65486 and then scales to 6548.6 °C. Outdoor and inlet temperatures are the usual casualties.
 
 ### Scaling
 
@@ -154,6 +200,105 @@ if mul != 0: result = result * mul
 | 4800      | 0      | -100 | 0   | 48.00            | voltage in hundredths of a volt |
 | 10500     | -10000 | -10  | -1  | 50.00            | signed current with offset |
 | 434       | -400   | -10  | 0   | 3.4              | temperature with -40 offset |
+
+---
+
+## Writes (MQTT to Modbus)
+
+A **write** is the mirror image of an input: instead of polling a register and publishing the result, `modbusmq_subscribe` subscribes to an MQTT topic and writes whatever arrives to a register or coil.
+
+`write.max` must appear **before** any `write.N.*` keys, the same way `input.max` does.
+
+```
+write.max = 2
+```
+
+Writes are **fire and forget**. The request is queued alongside the polls, so it shares the bus in turn and needs no separate connection; nothing waits for the echo. A write that fails is reported through the normal error path, tagged with its slave and address.
+
+### Per-write keys
+
+```
+write.N.name      = compressor_setpoint   # used in log lines; optional
+write.N.slave     = 39                    # required, never defaulted
+write.N.type      = holding_register      # holding_register or coil
+write.N.function  = write_register        # write_register, write_registers or write_coil
+write.N.address   = 0x0028                # absolute register or coil address, required
+write.N.format    = int16                 # required for register writes
+write.N.add       = 0                     # scaling, applied in reverse (see below)
+write.N.mod       = -10
+write.N.mul       = 1
+write.N.on_value  = 1                     # optional discrete command mapping
+write.N.off_value = 0
+write.N.topic     = settings/compressor   # subscribed, never published
+```
+
+| Function           | Modbus | Writes                                  |
+|--------------------|--------|-----------------------------------------|
+| `write_register`   | 06     | one register — 2-byte formats           |
+| `write_registers`  | 16     | two registers — 4-byte formats           |
+| `write_coil`       | 05     | one coil (bit)                          |
+
+`write.N.type` accepts `coil` or `holding_register` only. A `discrete_input` is read-only by definition and an `input_register` has no write function at all, so both are rejected.
+
+`type` and `function` are two ways of saying the same thing. Give either one and the other is derived; give both and they must agree. A 4-byte format requires `write_registers`, because function 06 writes a single register.
+
+`slave` is never defaulted — writing to a guessed device is not a recoverable mistake.
+
+### Scaling a write
+
+Scaling is the exact inverse of a channel's, undone in reverse order:
+
+```
+raw = value
+if mul != 0: raw = raw / mul
+if mod > 0:  raw = raw / mod
+if mod < 0:  raw = raw * abs(mod)
+raw = raw - add
+raw = round(raw)
+```
+
+So a channel reading `mod = -10` publishes `raw / 10`, and a write with `mod = -10` sends `round(value * 10)`. A value that does not fit the format is **rejected and logged, never truncated** — a setpoint that silently wraps to a small number is worse than one that never arrives, because the device accepts it without complaint.
+
+### Commands: on_value / off_value
+
+With `on_value` and `off_value` set, the payload is treated as a command rather than a measurement. `1`/`0` work, and so do `on`/`off`/`true`/`false` in any case, since brokers differ on what they publish. Anything else is rejected and logged.
+
+Set both or neither. They work for register writes too, not just coils — some models take power on/off as a register value rather than a coil.
+
+### Example
+
+```
+write.max = 2
+
+# Compressor setpoint, degC x10, in a signed holding register
+write.1.name     = compressor_on_temperature_setpoint
+write.1.slave    = 39
+write.1.type     = holding_register
+write.1.function = write_register
+write.1.address  = 0x0028
+write.1.format   = int16
+write.1.mod      = -10
+write.1.topic    = settings/compressor_on_temperature
+
+# Unit power, a coil (function 05)
+write.2.name      = power_on_off
+write.2.slave     = 39
+write.2.type      = coil
+write.2.function  = write_coil
+write.2.address   = 0x000C
+write.2.on_value  = 1
+write.2.off_value = 0
+write.2.topic     = commands/power
+```
+
+Publishing `25.5` to `settings/compressor_on_temperature` writes `0x00FF` (255) to register `0x0028` on slave 39. Publishing `ON` to `commands/power` sets coil `0x000C`.
+
+### Notes
+
+- **Do not retain command topics.** A retained payload is replayed by the broker every time we subscribe, including after every reconnect, so a retained setpoint gets rewritten to the device on each one. This is the publisher's setting, not something the config can override.
+- **Writes need MQTT.** Without `mqtt.connect`, or in a build without `--enable-mqtt`, write entries are parsed and warned about but can never fire.
+- **Several entries may share a topic**, and one publish then fires all of them. Deliberate, but easy to do by accident with placeholder topics.
+- `mqtt.topic_prefix` applies to write topics as well as published ones.
 
 ---
 
@@ -224,7 +369,9 @@ mqtt.connect = mqtt://localhost:1883
 
 ## Common pitfalls
 
+- **`write.max` must appear before any `write.N.*` key**, and a `write.N` beyond `write.max` is a hard error rather than a silent skip.
 - **`input.max` must appear before any `input.N.*` key.** Same for `input.N.channel.max` before channel keys. The parser allocates memory when it sees these declarations; later keys that reference out-of-range indices are silently skipped.
 - **`input.query_mode` must appear before `input.N.*` keys** for the mode to take effect when building the timer list.
 - **Hex addresses** (`0x0FFF`) work in address fields.
-- **Byte offset vs register offset**: `channel.offset` is always in bytes. Register 3 of a 2-byte-per-register response is at byte offset 6.
+- **Byte offset vs register offset**: for a register block `channel.offset` is in bytes — register 3 of a 2-byte-per-register response is at byte offset 6. For a `coil` or `discrete_input` block it is a coil index instead, because a bit has no byte offset of its own.
+- **A dropped write is reported, not silent.** If the Modbus link goes down with requests still queued, each one is logged and passed to the error callback rather than discarded quietly.

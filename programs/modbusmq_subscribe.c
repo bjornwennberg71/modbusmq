@@ -21,6 +21,7 @@
 #include <math.h>
 #include <assert.h>
 #include <errno.h>
+#include <strings.h>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -173,6 +174,316 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
     fflush(stdout);
 }
 
+#if MQTT_ENABLED
+//////////////////////////////////////////////////////////////////////////////
+//
+// Map an MQTT payload onto the value a write entry expects.
+//
+// Two shapes are accepted. With on_value/off_value configured the payload is a
+// command: the usual textual spellings are folded onto 1/0 first, so a broker
+// publishing "ON" works as well as one publishing "1", and the result selects
+// the configured on or off value. Without them the payload is a number in
+// engineering units, to be scaled by modbusmq_write_encode().
+//
+// @return 0 on success with *out set, < 0 when the payload is not usable
+//
+static int
+mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *out)
+{
+    const char
+        *name = write->name ? write->name : write->topic;
+
+    while (*payload == ' ' || *payload == '\t')
+    {
+        payload++;
+    }
+
+    if (!*payload)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: empty payload. action: skip write\n", name);
+        return -1;
+    }
+
+    if (write->has_on_value)
+    {
+        int
+            on = -1;
+
+        if (strcasecmp(payload, "on")   == 0 ||
+            strcasecmp(payload, "true") == 0)
+        {
+            on = 1;
+        }
+        else if (strcasecmp(payload, "off")   == 0 ||
+                 strcasecmp(payload, "false") == 0)
+        {
+            on = 0;
+        }
+        else
+        {
+            char
+                *end = NULL;
+            double
+                d = strtod(payload, &end);
+
+            if (end == payload || *end)
+            {
+                modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" is not a command. action: skip write\n", name, payload);
+                return -1;
+            }
+            //
+            // Compare against the configured values rather than treating any
+            // non-zero as on: a device whose off_value is 2 would otherwise be
+            // switched on by the very value meant to switch it off.
+            //
+            if ((int)d == write->on_value)
+            {
+                on = 1;
+            }
+            else if ((int)d == write->off_value)
+            {
+                on = 0;
+            }
+            else
+            {
+                modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" is neither on_value %d nor off_value %d. action: skip write\n",
+                              name, payload, write->on_value, write->off_value);
+                return -1;
+            }
+        }
+
+        *out = on ? write->on_value : write->off_value;
+        return 0;
+    }
+
+    char
+        *end = NULL;
+    double
+        d = strtod(payload, &end);
+
+    if (end == payload)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" is not a number. action: skip write\n", name, payload);
+        return -1;
+    }
+    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')
+    {
+        end++;
+    }
+    if (*end)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" has trailing junk. action: skip write\n", name, payload);
+        return -1;
+    }
+
+    *out = d;
+    return 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Queue the Modbus write for one write entry.
+//
+// Fire and forget: the request goes on the same queue as every poll, so it is
+// serialised with them and needs no locking, and nothing here waits for the
+// echo. A write that fails reports through modbusmq_error_callback() like any
+// other request.
+//
+// @return 0 when queued, < 0 when it was not
+//
+static int
+modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *write, double value)
+{
+    const char
+        *name = write->name ? write->name : write->topic;
+
+    if (!GI.modbus_connected)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: device is not connected. action: skip write\n", name);
+        return -1;
+    }
+
+    modbusmq_msg_t
+        msg;
+
+    memset(&msg, 0, sizeof(msg));
+    modbusmq_set_slave(context, write->slave);
+
+    if (write->function == ModbusmqWriteFunction_Coil)
+    {
+        int
+            on = (value != 0);
+
+        //
+        // A coil carries one bit, so on_value/off_value only decide which way
+        // round it goes; the value itself never reaches the wire.
+        //
+        if (write->has_on_value)
+        {
+            on = ((int)value == write->on_value);
+        }
+
+        modbusmq_frame_write_coil_bit(context, &msg.frame[0], write->address, on);
+        modbusmq_logf(LOG_INFO, "write %s: slave %d coil 0x%04X = %d\n", name, write->slave, write->address, on);
+    }
+    else
+    {
+        uint16_t
+            regs[2] = {0};
+        int
+            nregs = modbusmq_write_encode(context, write, value, regs);
+
+        if (nregs < 0)
+        {
+            return -1; // already logged, with the reason
+        }
+
+        if (nregs == 1)
+        {
+            modbusmq_frame_write_register(context, &msg.frame[0], write->address, regs[0]);
+            modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X)\n",
+                          name, write->slave, write->address, value, regs[0]);
+        }
+        else
+        {
+            modbusmq_frame_write_registers(context, &msg.frame[0], write->address, nregs, regs);
+            modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X%04X)\n",
+                          name, write->slave, write->address, value, regs[0], regs[1]);
+        }
+    }
+
+    int
+        rc = modbusmq_post(context, &msg);
+    if (rc != 0)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: unable to queue the request, rc=%d\n", name, rc);
+        return -1;
+    }
+
+    return 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// mosquitto message callback: an incoming publish on a write topic
+//
+// More than one write entry may share a topic, so every match is acted on
+// rather than only the first.
+//
+static void
+mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message)
+{
+    struct modbusmq_context_t
+        *context = (struct modbusmq_context_t *)userdata;
+    modbusmq_config_t
+        *modbusmq_config = modbusmq_config_get();
+
+    if (!message || !message->topic)
+    {
+        return;
+    }
+
+    //
+    // The payload is not NUL-terminated on the wire and is attacker-adjacent
+    // input, so copy it into a bounded buffer before treating it as a string.
+    //
+    char
+        payload[64];
+    int
+        len = message->payloadlen;
+
+    if (len < 0 || len >= (int)sizeof(payload))
+    {
+        modbusmq_logf(LOG_ERROR, "MQTT: %s: payload of %d bytes is too long. action: ignore\n", message->topic, message->payloadlen);
+        return;
+    }
+    if (len > 0)
+    {
+        memcpy(payload, message->payload, len);
+    }
+    payload[len] = 0;
+
+    int
+        matched = 0;
+
+    for(int w = 0; w < modbusmq_config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &modbusmq_config->writes[w];
+
+        if (!write->topic || strcmp(write->topic, message->topic) != 0)
+        {
+            continue;
+        }
+
+        matched++;
+
+        double
+            value = 0;
+
+        if (mqtt_payload_value(write, payload, &value) != 0)
+        {
+            continue; // already logged
+        }
+
+        modbus_write_post(context, write, value);
+    }
+
+    if (!matched)
+    {
+        modbusmq_logf(LOG_ERROR, "MQTT: %s: no write entry for this topic. action: ignore\n", message->topic);
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Subscribe to every write topic.
+//
+// Kept separate from the initial connect because the broker forgets our
+// subscriptions on every reconnect, so this has to be callable again.
+//
+// @return 0 when every subscribe succeeded, < 0 otherwise
+//
+static int
+mqtt_subscribe_writes(void)
+{
+    modbusmq_config_t
+        *modbusmq_config = modbusmq_config_get();
+    int
+        rc_all = 0;
+
+    for(int w = 0; w < modbusmq_config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &modbusmq_config->writes[w];
+
+        if (!write->topic)
+        {
+            continue;
+        }
+
+        //
+        // QoS 1: a lost setpoint is not something the publisher finds out
+        // about, and the cost of the occasional duplicate is one redundant
+        // write of a value we were asked for anyway.
+        //
+        int
+            rc = mosquitto_subscribe(GI.mosq, NULL, write->topic, 1);
+        if (rc != MOSQ_ERR_SUCCESS)
+        {
+            modbusmq_logf(LOG_ERROR, "MQTT: unable to subscribe to %s (rc=%d)\n", write->topic, rc);
+            rc_all = -1;
+            continue;
+        }
+
+        modbusmq_logf(LOG_INFO, "MQTT: subscribed to %s -> %s\n",
+                      write->topic, write->name ? write->name : "write");
+    }
+
+    return rc_all;
+}
+#endif // MQTT_ENABLED
+
 //
 // print help
 //
@@ -280,6 +591,12 @@ mqtt_try_reconnect(modbusmq_connect_t *connect)
     {
         modbusmq_logf(LOG_INFO, "MQTT: reconnected successfully\n");
         GI.mqtt_connected = 1;
+        //
+        // This is a clean session, so the broker kept none of our
+        // subscriptions across the drop. Without this the write topics go
+        // quiet after the first blip and nothing says so.
+        //
+        mqtt_subscribe_writes();
         return 1;
     }
  
@@ -340,6 +657,23 @@ main(int argc, char **argv)
     {
         GI.has_mqtt = 1;
     }
+
+    //
+    // Writes arrive over MQTT, so without a broker they can never fire. Say so
+    // rather than starting up looking healthy.
+    //
+    if (modbusmq_config->write_max > 0 && !GI.has_mqtt)
+    {
+        fprintf(stderr, "WARNING: %d write entries configured but no mqtt.connect — nothing can trigger them\n",
+                modbusmq_config->write_max);
+    }
+#if !MQTT_ENABLED
+    if (modbusmq_config->write_max > 0)
+    {
+        fprintf(stderr, "WARNING: %d write entries configured but this build has MQTT disabled — rebuild with --enable-mqtt\n",
+                modbusmq_config->write_max);
+    }
+#endif
 
     
     //
@@ -442,9 +776,14 @@ main(int argc, char **argv)
 #if MQTT_ENABLED
     if (GI.has_mqtt)
     {
-        GI.mosq = mosquitto_new(modbusmq_config->mqtt_name, true, NULL);
+        GI.mosq = mosquitto_new(modbusmq_config->mqtt_name, true, context);
         assert(GI.mosq);
-        
+
+        if (modbusmq_config->write_max > 0)
+        {
+            mosquitto_message_callback_set(GI.mosq, &mqtt_message_callback);
+        }
+
         rc = mosquitto_connect(GI.mosq, connect.device, connect.port, 3600);
         if (rc != 0)
         {
@@ -456,6 +795,7 @@ main(int argc, char **argv)
         else
         {
             GI.mqtt_connected = 1;
+            mqtt_subscribe_writes();
         }
     }
 #else
@@ -486,6 +826,16 @@ main(int argc, char **argv)
         case ModbusmqType_InputRegister:
             modbusmq_frame_read_input_registers(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
             break;
+        case ModbusmqType_Coil:
+            //
+            // naddress is a coil count here, not a register count — the device
+            // answers with them packed eight to a byte.
+            //
+            modbusmq_frame_read_coil_bits(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
+            break;
+        case ModbusmqType_DiscreteInput:
+            modbusmq_frame_read_input_bits(context, &msg.frame[0], input->address + input->address_offset, input->naddress);
+            break;
         default:
             fprintf(stderr, "Unknown input-type for slave=%d: input_mode=%d\n", input->slave, input->type);
             break;
@@ -498,6 +848,7 @@ main(int argc, char **argv)
         }
     }
     
+
 
     modbusmq_timer_debug_print(context);
 

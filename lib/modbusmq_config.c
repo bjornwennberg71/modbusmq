@@ -107,6 +107,14 @@ modbusmq_config_dataformat(const char *value)
     {
         return ModbusmqDataFormat_ba;
     }
+    else if (strcmp(value, MODBUSMQ_FORMAT_INT16_AB) == 0)
+    {
+        return ModbusmqDataFormat_int16_ab;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_INT16_BA) == 0)
+    {
+        return ModbusmqDataFormat_int16_ba;
+    }
     else if (strcmp(value, MODBUSMQ_FORMAT_ABCD) == 0)
     {
         return ModbusmqDataFormat_abcd;
@@ -136,9 +144,13 @@ modbusmq_config_dataformat(const char *value)
         return ModbusmqDataFormat_float_cdab;
     }
 
+    //
+    // No assert here. A typo in a config file is the operator's mistake to
+    // see and fix, not grounds for aborting the process — and with NDEBUG set
+    // the assert vanished and left format 0 to be discovered much later.
+    //
     modbusmq_logf(LOG_ERROR, "Unsupported format: %s\n", value);
-    assert(0);
-    return 0;
+    return ModbusmqDataFormat_unknown;
 }
 
 int modbusmq_config_query_mode(const char *key)
@@ -178,7 +190,36 @@ modbusmq_config_input_type(const char *value)
     {
         return ModbusmqType_HoldingRegister;
     }
+    else if (strcmp(value, MODBUSMQ_TYPE_COIL) == 0)
+    {
+        return ModbusmqType_Coil;
+    }
+    else if (strcmp(value, MODBUSMQ_TYPE_DISCRETE_INPUT) == 0)
+    {
+        return ModbusmqType_DiscreteInput;
+    }
     return 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// 
+// write function name -> ModbusmqWriteFunction_e, _Unknown when unrecognised
+int
+modbusmq_config_write_function(const char *value)
+{
+    if (strcmp(value, MODBUSMQ_FUNCTION_WRITE_COIL) == 0)
+    {
+        return ModbusmqWriteFunction_Coil;
+    }
+    else if (strcmp(value, MODBUSMQ_FUNCTION_WRITE_REGISTER) == 0)
+    {
+        return ModbusmqWriteFunction_Register;
+    }
+    else if (strcmp(value, MODBUSMQ_FUNCTION_WRITE_REGISTERS) == 0)
+    {
+        return ModbusmqWriteFunction_Registers;
+    }
+    return ModbusmqWriteFunction_Unknown;
 }
 
 
@@ -464,23 +505,14 @@ modbusmq_config_parse(const char *filename)
                 else if (strcmp(channel_key, "format") == 0)
                 {
                     channel->format = modbusmq_config_dataformat(value);
-                    switch(channel->format)
+                    if (channel->format == ModbusmqDataFormat_unknown)
                     {
-                        case ModbusmqDataFormat_a: channel->length = 1; break;
-                        case ModbusmqDataFormat_ab: 
-                        case ModbusmqDataFormat_ba:
-                        case ModbusmqDataFormat_float_ba:
-                        channel->length = 2; break;
-                        case ModbusmqDataFormat_abcd:
-                        case ModbusmqDataFormat_badc:
-                        case ModbusmqDataFormat_float_abcd:
-                        case ModbusmqDataFormat_float_badc:
-                        case ModbusmqDataFormat_float_dcba:
-                        case ModbusmqDataFormat_float_cdab:
-                        channel->length = 4; break;
-                        default:
-                        channel->length = 2; break; // TODO: write warning of unknown length
+                        fprintf(stderr, "%d: %s=%s: unknown format\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
                     }
+                    channel->length = modbusmq_format_size(channel->format);
                 }
                 else if (strcmp(channel_key, "mod") == 0)
                 {
@@ -513,6 +545,162 @@ modbusmq_config_parse(const char *filename)
             
             
         }
+        else if (strcmp(key, "write.max") == 0)
+        {
+            if (modbusmq_config->writes)
+            {
+                fprintf(stderr, "%d: %s listed more than once\n", line_num, key);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            int
+                nvalue = (int)strtoul(value, NULL, 0);
+            if (nvalue < 0 || nvalue > 100)
+            {
+                fprintf(stderr, "%d: %s must be between [0..100]\n", line_num, key);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            if (nvalue > 0)
+            {
+                modbusmq_config->write_max = nvalue;
+                modbusmq_config->writes    = malloc(nvalue * sizeof(modbusmq_write_t));
+                if (!modbusmq_config->writes)
+                {
+                    perror("Unable to allocate");
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                memset(modbusmq_config->writes, 0, nvalue * sizeof(modbusmq_write_t));
+            }
+        }
+        // write.1.something
+        else if (strncmp(key, "write.", 6) == 0)
+        {
+            int
+                write_num = 0;
+            char
+                write_key[100];
+
+            int
+                n = sscanf(key, "write.%d.%99s", &write_num, write_key);
+            if (n != 2)
+            {
+                fprintf(stderr, "%d: %s: Unable to scan key\n", line_num, key);
+                continue;
+            }
+
+            if (write_num <= 0 || write_num > modbusmq_config->write_max)
+            {
+                fprintf(stderr, "%d: %s, write=%d must be between 1..%d (is write.max set, and set first?)\n",
+                        line_num, key, write_num, modbusmq_config->write_max);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+
+            modbusmq_write_t
+                *write = &modbusmq_config->writes[write_num-1];
+
+            if (strcmp(write_key, "name") == 0)
+            {
+                write->name = strdup(value);
+            }
+            else if (strcmp(write_key, "slave") == 0)
+            {
+                write->slave     = (int)strtoul(value, NULL, 0);
+                write->has_slave = 1;
+            }
+            else if (strcmp(write_key, "type") == 0)
+            {
+                write->type = modbusmq_config_input_type(value);
+                if (write->type == 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: expected %s or %s\n",
+                            line_num, key, value, MODBUSMQ_TYPE_COIL, MODBUSMQ_TYPE_HOLDING_REGISTER);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                //
+                // A discrete input is read-only by definition, and an input
+                // register has no write function at all.
+                //
+                if (write->type != ModbusmqType_Coil && write->type != ModbusmqType_HoldingRegister)
+                {
+                    fprintf(stderr, "%d: %s=%s: not writable, expected %s or %s\n",
+                            line_num, key, value, MODBUSMQ_TYPE_COIL, MODBUSMQ_TYPE_HOLDING_REGISTER);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+            }
+            else if (strcmp(write_key, "function") == 0)
+            {
+                write->function = modbusmq_config_write_function(value);
+                if (write->function == ModbusmqWriteFunction_Unknown)
+                {
+                    fprintf(stderr, "%d: %s=%s: expected %s, %s or %s\n",
+                            line_num, key, value,
+                            MODBUSMQ_FUNCTION_WRITE_COIL, MODBUSMQ_FUNCTION_WRITE_REGISTER,
+                            MODBUSMQ_FUNCTION_WRITE_REGISTERS);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+            }
+            else if (strcmp(write_key, "address") == 0)
+            {
+                write->address     = (int)strtoul(value, NULL, 0);
+                write->has_address = 1;
+            }
+            else if (strcmp(write_key, "format") == 0)
+            {
+                write->format = modbusmq_config_dataformat(value);
+                if (write->format == ModbusmqDataFormat_unknown)
+                {
+                    fprintf(stderr, "%d: %s=%s: unknown format\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                write->length = modbusmq_format_size(write->format);
+            }
+            else if (strcmp(write_key, "add") == 0)
+            {
+                write->add = strtod(value, NULL);
+            }
+            else if (strcmp(write_key, "mod") == 0)
+            {
+                write->mod = strtod(value, NULL);
+            }
+            else if (strcmp(write_key, "mul") == 0)
+            {
+                write->mul = strtod(value, NULL);
+            }
+            else if (strcmp(write_key, "on_value") == 0)
+            {
+                write->on_value     = (int)strtol(value, NULL, 0);
+                write->has_on_value = 1;
+            }
+            else if (strcmp(write_key, "off_value") == 0)
+            {
+                write->off_value     = (int)strtol(value, NULL, 0);
+                write->has_off_value = 1;
+            }
+            else if (strcmp(write_key, "topic") == 0)
+            {
+                write->topic = strdup(value);
+            }
+            else
+            {
+                fprintf(stderr, "%d: %s: Unknown configuration\n", line_num, key);
+                continue;
+            }
+        }
         else if (strcmp(key, "mqtt.name") == 0)
         {
             modbusmq_config->mqtt_name = strdup(value);
@@ -537,6 +725,161 @@ modbusmq_config_parse(const char *filename)
     fclose(fp);
     free(line);
 
+    //
+    // A coil or discrete input carries one bit per address, so its channels
+    // need no format — and a format on one is a sign the config was written
+    // against the wrong address space. A register channel needs one.
+    //
+    for(int i = 0; i < modbusmq_config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &modbusmq_config->inputs[i];
+
+        for(int c = 0; c < input->channel_max; ++c)
+        {
+            modbusmq_channel_t
+                *channel = &input->channels[c];
+
+            if (!channel->topic)
+            {
+                continue; // an unused channel slot
+            }
+
+            if (MODBUSMQ_TYPE_IS_BIT(input->type))
+            {
+                if (channel->format != ModbusmqDataFormat_unknown)
+                {
+                    fprintf(stderr, "input.%d.channel.%d: format does not apply to a %s input, offset is a coil index\n",
+                            i+1, c+1,
+                            input->type == ModbusmqType_Coil ? MODBUSMQ_TYPE_COIL : MODBUSMQ_TYPE_DISCRETE_INPUT);
+                    return -1;
+                }
+                continue;
+            }
+
+            if (channel->format == ModbusmqDataFormat_unknown)
+            {
+                fprintf(stderr, "input.%d.channel.%d: format is required\n", i+1, c+1);
+                return -1;
+            }
+        }
+    }
+
+    //
+    // Validate the write entries here rather than at the first MQTT message.
+    // A misconfigured write is a config error, and discovering it only when
+    // someone finally publishes a setpoint is far too late — by then the
+    // operator believes the command went through.
+    //
+    for(int w = 0; w < modbusmq_config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &modbusmq_config->writes[w];
+        const char
+            *name = write->name ? write->name : "?";
+
+        if (!write->topic || !write->topic[0])
+        {
+            fprintf(stderr, "write.%d (%s): a topic to subscribe to is required\n", w+1, name);
+            return -1;
+        }
+        if (!write->has_address)
+        {
+            fprintf(stderr, "write.%d (%s): address is required\n", w+1, name);
+            return -1;
+        }
+        //
+        // No default slave. Guessing which device to write to is not a
+        // recoverable mistake the way a misread register is.
+        //
+        if (!write->has_slave)
+        {
+            fprintf(stderr, "write.%d (%s): slave is required\n", w+1, name);
+            return -1;
+        }
+        if (write->has_on_value != write->has_off_value)
+        {
+            fprintf(stderr, "write.%d (%s): set both on_value and off_value, or neither\n", w+1, name);
+            return -1;
+        }
+
+        //
+        // type and function are two ways of saying the same thing. Accept
+        // either, derive the missing one, and refuse a config that says both
+        // and disagrees with itself.
+        //
+        if (write->type == 0 && write->function == ModbusmqWriteFunction_Unknown)
+        {
+            fprintf(stderr, "write.%d (%s): either type or function is required\n", w+1, name);
+            return -1;
+        }
+
+        if (write->function == ModbusmqWriteFunction_Unknown)
+        {
+            if (write->type == ModbusmqType_Coil)
+            {
+                write->function = ModbusmqWriteFunction_Coil;
+            }
+            else
+            {
+                write->function = (write->length == 4) ? ModbusmqWriteFunction_Registers
+                                                       : ModbusmqWriteFunction_Register;
+            }
+        }
+        else if (write->type == 0)
+        {
+            write->type = (write->function == ModbusmqWriteFunction_Coil) ? ModbusmqType_Coil
+                                                                          : ModbusmqType_HoldingRegister;
+        }
+        else
+        {
+            int
+                coil_type = (write->type     == ModbusmqType_Coil);
+            int
+                coil_func = (write->function == ModbusmqWriteFunction_Coil);
+
+            if (coil_type != coil_func)
+            {
+                fprintf(stderr, "write.%d (%s): type and function disagree\n", w+1, name);
+                return -1;
+            }
+        }
+
+        if (write->function == ModbusmqWriteFunction_Coil)
+        {
+            //
+            // A coil is one bit. Scaling it is always a mistake, so say so
+            // instead of quietly ignoring the keys.
+            //
+            if (write->add || write->mod || write->mul || write->format)
+            {
+                fprintf(stderr, "write.%d (%s): format/add/mod/mul do not apply to a coil write\n", w+1, name);
+                return -1;
+            }
+            continue;
+        }
+
+        if (write->format == ModbusmqDataFormat_unknown)
+        {
+            fprintf(stderr, "write.%d (%s): format is required for a register write\n", w+1, name);
+            return -1;
+        }
+        //
+        // A register write moves whole registers, so a 1-byte format has no
+        // unambiguous meaning: nothing says which half it belongs in.
+        //
+        if (write->length != 2 && write->length != 4)
+        {
+            fprintf(stderr, "write.%d (%s): format is not writable, a register write is 2 or 4 bytes\n", w+1, name);
+            return -1;
+        }
+        if (write->length == 4 && write->function == ModbusmqWriteFunction_Register)
+        {
+            fprintf(stderr, "write.%d (%s): a 4-byte format needs %s, function 06 writes one register\n",
+                    w+1, name, MODBUSMQ_FUNCTION_WRITE_REGISTERS);
+            return -1;
+        }
+    }
 
     if (modbusmq_config->mqtt_topic_prefix)
     {
@@ -563,6 +906,34 @@ modbusmq_config_parse(const char *filename)
                     channel->topic = topic;
                 }
             }
+        }
+
+        //
+        // Write topics get the same prefix as published ones, so a config
+        // lives under one namespace in both directions.
+        //
+        for(int w = 0; w < modbusmq_config->write_max; ++w)
+        {
+            modbusmq_write_t
+                *write = &modbusmq_config->writes[w];
+
+            if (!write->topic)
+            {
+                continue;
+            }
+            int
+                ntopic = strlen(write->topic);
+
+            char *topic = malloc(nprefix + ntopic + 1);
+            if (!topic)
+            {
+                perror("Unable to allocate");
+                return -1;
+            }
+            strcpy(topic, modbusmq_config->mqtt_topic_prefix);
+            strcat(topic, write->topic);
+            free(write->topic);
+            write->topic = topic;
         }
     }
 
@@ -597,6 +968,15 @@ modbusmq_config_close()
 
         free(input->channels);
     }
+    for(int w = 0; w < modbusmq_config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &modbusmq_config->writes[w];
+        if (write->name)  { free(write->name); }
+        if (write->topic) { free(write->topic); }
+    }
+    free(modbusmq_config->writes);
+
     if (modbusmq_config->mqtt_name) { free(modbusmq_config->mqtt_name); }
     if (modbusmq_config->mqtt_connect) { free(modbusmq_config->mqtt_connect); }
     if (modbusmq_config->mqtt_topic_prefix) { free(modbusmq_config->mqtt_topic_prefix); }
