@@ -19,13 +19,13 @@ extern "C" {
 // The values are the Modbus read function codes, so an input's type is also
 // the function used to poll it.
 //
-enum modbusmq_type_e
+typedef enum modbusmq_type_e
 {
     modbusmq_type_coil             = 0x01,
     modbusmq_type_discrete_input   = 0x02,
     modbusmq_type_holding_register = 0x03,
     modbusmq_type_input_register   = 0x04
-};
+} modbusmq_type_e;
 
 #define MODBUSMQ_TYPE_COIL             "coil"
 #define MODBUSMQ_TYPE_DISCRETE_INPUT   "discrete_input"
@@ -41,13 +41,13 @@ enum modbusmq_type_e
 // write entry addresses one thing, so there is never more than one coil to
 // set, and 15 buys nothing but a bit-packing order to get wrong.
 //
-enum modbusmq_write_function_e
+typedef enum modbusmq_write_function_e
 {
     modbusmq_write_function_unknown   = 0x00,
     modbusmq_write_function_coil      = 0x05,
     modbusmq_write_function_register  = 0x06,
     modbusmq_write_function_registers = 0x10
-};
+} modbusmq_write_function_e;
 
 #define MODBUSMQ_FUNCTION_WRITE_COIL      "write_coil"
 #define MODBUSMQ_FUNCTION_WRITE_REGISTER  "write_register"
@@ -65,7 +65,7 @@ enum modbusmq_write_function_e
 // old one and are warned at startup, so an already-deployed file never changes
 // meaning underneath its owner. See modbusmq_config_apply_format_version().
 //
-enum modbusmq_data_format_e
+typedef enum modbusmq_data_format_e
 {
     modbusmq_data_format_unknown = 0,
     modbusmq_data_format_a,    // uint8_t
@@ -84,7 +84,7 @@ enum modbusmq_data_format_e
     modbusmq_data_format_float_dcba, // float
     modbusmq_data_format_float_cdab  // float, low word first (common in industrial Modbus devices)
 
-};
+} modbusmq_data_format_e;
 
 #define MODBUSMQ_FORMAT_A          "int_a"
 #define MODBUSMQ_FORMAT_AB         "int_ab"
@@ -113,7 +113,7 @@ typedef enum modbusmq_query_mode_e
     modbusmq_query_mode_parallell = 0, // parallell
     modbusmq_query_mode_series    = 1,  // series
     modbusmq_query_mode_max 
-} modbusmq_query_mode_t;
+} modbusmq_query_mode_e;
 
 //
 // info about one channel
