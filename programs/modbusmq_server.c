@@ -432,6 +432,91 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
         // used to be trusted unchecked here, which allowed a single crafted
         // request to overflow res->buf).
         //
+        // Write functions: validate, log, and echo.
+        //
+        // A real device answers 05 and 06 by returning the request verbatim,
+        // and 16 by returning the address and the register count without the
+        // data. All three come to 12 bytes.
+        //
+        // Nothing is stored. The premise of the write path is that a device's
+        // setpoint register is not the register you read the value back from,
+        // so writing into a read channel would invent a round trip that real
+        // hardware does not have.
+        //
+        if (function == MODBUSMQ_WRITE_SINGLE_COIL ||
+            function == MODBUSMQ_WRITE_SINGLE_REGISTER ||
+            function == MODBUSMQ_WRITE_MULTIPLE_REGISTERS)
+        {
+            int
+                value = req->buf[10] << 8 | req->buf[11];
+            int
+                bad = 0;
+
+            if (function == MODBUSMQ_WRITE_SINGLE_COIL)
+            {
+                // the protocol allows exactly these two
+                if (value != 0xFF00 && value != 0x0000)
+                {
+                    bad = 1;
+                }
+                else
+                {
+                    printf("write: slave %d coil 0x%04X = %d\n", slave_id, address_start, value == 0xFF00);
+                }
+            }
+            else if (function == MODBUSMQ_WRITE_SINGLE_REGISTER)
+            {
+                printf("write: slave %d reg 0x%04X = 0x%04X (%d)\n", slave_id, address_start, value, value);
+            }
+            else
+            {
+                //
+                // value is the register count here, and the byte count that
+                // follows it has to agree with it or the frame is malformed.
+                //
+                int
+                    nbyte = req->buf[12];
+
+                if (value < 1 || value > 123 || nbyte != value * 2 || req->xmit < 13 + nbyte)
+                {
+                    bad = 1;
+                }
+                else
+                {
+                    printf("write: slave %d reg 0x%04X x%d =", slave_id, address_start, value);
+                    for (int i = 0; i < nbyte; ++i)
+                    {
+                        printf(" %02X", req->buf[13 + i]);
+                    }
+                    printf("\n");
+                }
+            }
+
+            if (bad)
+            {
+                res->buf[7] = function | 0x80;
+                res->buf[8] = 0x03; // illegal data value
+                res->buf[4] = 0;
+                res->buf[5] = 3;
+                res->length = 9;
+                return 0;
+            }
+
+            // echo: address and value (or register count for function 16)
+            res->buf[8]  = req->buf[8];
+            res->buf[9]  = req->buf[9];
+            res->buf[10] = req->buf[10];
+            res->buf[11] = req->buf[11];
+
+            res->buf[4] = 0;
+            res->buf[5] = 6; // unit + function + address(2) + value(2)
+            res->length = 12;
+
+            fflush(stdout);
+            return 0;
+        }
+
+        //
         // Coils and discrete inputs answer with one bit per address packed
         // eight to a byte, so they need their own limit and their own payload
         // shape. Modbus caps them at 2000 per request.
