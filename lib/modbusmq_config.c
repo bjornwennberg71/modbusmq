@@ -11,6 +11,7 @@
 #include "modbusmq_log.h"
 
 #include <string.h>
+#include <strings.h>  // strcasecmp
 #include <stdlib.h>
 #include <stdio.h> // debug
 #include <assert.h> // debug
@@ -82,6 +83,23 @@ config_handle_value(char **value)
 //////////////////////////////////////////////////////////////////////////////
 // 
 //
+//////////////////////////////////////////////////////////////////////////////
+//
+// 1/0, true/false, yes/no. < 0 when it is none of those
+static int
+config_boolean(const char *value)
+{
+    if (strcmp(value, "1") == 0 || strcasecmp(value, "true") == 0 || strcasecmp(value, "yes") == 0)
+    {
+        return 1;
+    }
+    if (strcmp(value, "0") == 0 || strcasecmp(value, "false") == 0 || strcasecmp(value, "no") == 0)
+    {
+        return 0;
+    }
+    return -1;
+}
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // Replace a config string, keeping the last value seen.
@@ -373,6 +391,8 @@ modbusmq_config_parse(const char *filename)
     modbusmq_config->modbusmq_rts_delay_us    = 10000; // default 10 ms wait before send
     modbusmq_config->modbusmq_frame_timeout_ms = 1000; // maximum 1000 ms waiting for a frame before giving up
     modbusmq_config->offset_size = 1; // default 1 byte offset calculation
+    modbusmq_config->mqtt_retain = 1; // what publishing has always done
+    modbusmq_config->mqtt_qos    = 0;
     
     while ((nread = getline(&line, &line_len, fp)) != -1)
     {
@@ -645,6 +665,30 @@ modbusmq_config_parse(const char *filename)
                 {
                     channel->value = strtod(value, NULL);
                 }
+                else if (strcmp(channel_key, "retain") == 0)
+                {
+                    channel->retain = config_boolean(value);
+                    if (channel->retain < 0)
+                    {
+                        fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_retain = 1;
+                }
+                else if (strcmp(channel_key, "qos") == 0)
+                {
+                    channel->qos = (int)strtol(value, NULL, 0);
+                    if (channel->qos < 0 || channel->qos > 2)
+                    {
+                        fprintf(stderr, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_qos = 1;
+                }
             }
             else
             {
@@ -820,6 +864,28 @@ modbusmq_config_parse(const char *filename)
         else if (strcmp(key, "mqtt.connect") == 0)
         {
             config_set_string(&modbusmq_config->mqtt_connect, value);
+        }
+        else if (strcmp(key, "mqtt.retain") == 0)
+        {
+            modbusmq_config->mqtt_retain = config_boolean(value);
+            if (modbusmq_config->mqtt_retain < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+        }
+        else if (strcmp(key, "mqtt.qos") == 0)
+        {
+            modbusmq_config->mqtt_qos = (int)strtol(value, NULL, 0);
+            if (modbusmq_config->mqtt_qos < 0 || modbusmq_config->mqtt_qos > 2)
+            {
+                fprintf(stderr, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
         }
         else if (strcmp(key, "mqtt.topic_prefix") == 0)
         {

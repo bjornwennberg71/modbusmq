@@ -174,6 +174,8 @@ input.N.channel.M.mod    = -10      # scaling divisor/multiplier (see below)
 input.N.channel.M.mul    = -1       # final multiplier
 input.N.channel.M.topic  = battery/module/1/voltage   # MQTT topic
 input.N.channel.M.value  = 4800     # default value (used by modbusmq_server)
+input.N.channel.M.retain = 0        # override mqtt.retain for this channel
+input.N.channel.M.qos    = 1        # override mqtt.qos for this channel
 ```
 
 Only `offset`, `format`, and `topic` are required. `add`, `mod`, `mul`, and `value` are optional.
@@ -344,7 +346,33 @@ Publishing `25.5` to `settings/compressor_on_temperature` writes `0x00FF` (255) 
 mqtt.name         = my_device          # MQTT client identifier
 mqtt.connect      = mqtt://localhost:1883
 mqtt.topic_prefix = factory/line1/     # prepended to every channel topic
+mqtt.retain       = 1                  # default retain flag, 1/0 true/false yes/no
+mqtt.qos          = 0                  # default QoS, 0, 1 or 2
 ```
+
+### retain and qos
+
+`mqtt.retain` defaults to `1` and `mqtt.qos` to `0`, which is what publishing has
+always done, so leaving them out changes nothing.
+
+Retain is right for slow-moving state — a voltage, a state of charge — because a
+subscriber connecting midway gets a value immediately instead of waiting a poll
+interval. It is wrong for anything event-like, where a stale retained reading
+looks live forever and there is no way to tell how old it is.
+
+Either can be overridden per channel:
+
+```
+input.1.channel.4.retain = 0     # this one is not worth keeping
+input.1.channel.4.qos    = 1
+```
+
+A channel with no `retain`/`qos` of its own takes the `mqtt.*` value.
+
+Note that this governs only what modbusmq **publishes**. Write topics are
+subscribed at QoS 1, and whether an incoming command arrives retained is the
+publisher's setting, not something this config can override — see the note under
+Writes.
 
 If `mqtt.topic_prefix` is set, the final published topic is `prefix + channel.topic`. For example, with prefix `factory/line1/` and channel topic `battery/voltage`, the message is published to `factory/line1/battery/voltage`.
 

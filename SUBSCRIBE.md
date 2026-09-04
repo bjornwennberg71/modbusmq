@@ -228,10 +228,25 @@ the config can override.
 mqtt.name         = my_device        # client id, must be unique on the broker
 mqtt.connect      = mqtt://localhost:1883
 mqtt.topic_prefix = factory/line1/   # prepended to every topic, read and write
+mqtt.retain       = 1                # default; 1/0, true/false, yes/no
+mqtt.qos          = 0                # default; 0, 1 or 2
 ```
 
-Published values are strings with three decimals. Publishing currently uses
-retain, and the prefix applies to write topics too.
+Published values are strings with three decimals, and the prefix applies to write
+topics as well as published ones.
+
+`retain` suits slow-moving state — a subscriber that connects midway gets a value
+straight away rather than waiting a poll interval. It suits anything event-like
+much less, because a stale retained reading looks live forever. Override it per
+channel where the default is wrong:
+
+```
+input.1.channel.4.retain = 0
+input.1.channel.4.qos    = 1
+```
+
+The defaults match what modbusmq has always done, so an existing config behaves
+exactly as before.
 
 ---
 

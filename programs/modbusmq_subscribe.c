@@ -152,8 +152,18 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
 #if MQTT_ENABLED
         if (GI.has_mqtt && GI.mqtt_connected)
         {
+            //
+            // A channel may override the config-wide default, which is how a
+            // fast-moving reading avoids leaving a stale retained value behind
+            // while the slow ones keep theirs.
+            //
             int
-                rc = mosquitto_publish(GI.mosq, NULL, channel->topic, strlen(value), value, 0, true);
+                retain = channel->has_retain ? channel->retain : modbusmq_config->mqtt_retain;
+            int
+                qos    = channel->has_qos    ? channel->qos    : modbusmq_config->mqtt_qos;
+
+            int
+                rc = mosquitto_publish(GI.mosq, NULL, channel->topic, strlen(value), value, qos, retain);
             if (rc == MOSQ_ERR_NO_CONN || rc == MOSQ_ERR_CONN_LOST)
             {
                 modbusmq_logf(LOG_INFO, "MQTT: lost connection while publishing, will reconnect\n");

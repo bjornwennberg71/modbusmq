@@ -128,6 +128,13 @@ typedef struct modbusmq_channel_t
     int                     mul;    // if mul != 0, value*mul
     char                   *topic;
     float                   value; // used for debug to hold a value
+
+                                   // per-channel publish options. unset means
+                                   // take mqtt.retain / mqtt.qos
+    int                     retain;
+    uint8_t                 has_retain;
+    int                     qos;
+    uint8_t                 has_qos;
 } modbusmq_channel_t;
     
 //
@@ -221,6 +228,8 @@ typedef struct modbusmq_config_t
     char               *mqtt_name;
     char               *mqtt_connect;
     char               *mqtt_topic_prefix;
+    int                 mqtt_retain; // default for every published channel
+    int                 mqtt_qos;
 } modbusmq_config_t;
 
     
