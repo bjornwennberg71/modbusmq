@@ -1936,14 +1936,13 @@ modbusmq_frame_write_mask_registers( struct modbusmq_context_t *context, modbusm
     
     context->cb.modbusmq_write_mask_registers(context, frame, addr, and_mask, or_mask);
 
-    frame->buf[frame->length++] = and_mask >> 8;
-    frame->buf[frame->length++] = and_mask & 0x00ff;
+    //
+    // The transport laid down the address and the AND-mask; only the OR-mask
+    // is left. Both used to be appended here on top of what the transport had
+    // already written, so the frame carried each mask twice.
+    //
     frame->buf[frame->length++] = or_mask >> 8;
     frame->buf[frame->length++] = or_mask & 0x00ff;
-
-    // response: header[*] + address[2] + naddr[2]
-    // TODO: Need to verify and check this
-    //frame->res_length = context->header_length + 2 + 2;
 
     return frame->length;
 }

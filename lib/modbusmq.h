@@ -187,6 +187,10 @@ extern uint8_t *   modbusmq_frame_data(          struct modbusmq_context_t *cont
 extern int         modbusmq_frame_addr(          struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int         modbusmq_frame_naddr(         struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     
+    //
+    // Payload byte count of a read response. < 0 for anything without one: a
+    // request, a write echo, or an exception reply.
+    //
 extern int         modbusmq_frame_nbytes(        struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int         modbusmq_frame_error_code(    struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 

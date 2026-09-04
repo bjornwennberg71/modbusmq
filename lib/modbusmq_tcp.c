@@ -667,12 +667,31 @@ modbusmq_tcp_frame_naddr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_tcp_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
-    if (!frame->is_writer)
+    //
+    // Only a read response carries a byte count. In a write echo buf[8] is the
+    // high byte of the address and in an exception it is the error code, so
+    // handing either back as a length invites a caller to read the frame as
+    // something it is not.
+    //
+    // Returns -1 rather than asserting on a request: asking a frame for a
+    // field it does not have is a caller's mistake to see, not grounds for
+    // killing the process.
+    //
+    if (frame->is_writer)
     {
-        return frame->buf[8];
+        return -1;
     }
-    assert(0);
-    return 0;
+
+    switch (frame->buf[7])
+    {
+    case MODBUSMQ_READ_COILS:
+    case MODBUSMQ_READ_DISCRETE_INPUTS:
+    case MODBUSMQ_READ_HOLDING_REGISTERS:
+    case MODBUSMQ_READ_INPUT_REGISTERS:
+        return frame->buf[8];
+    default:
+        return -1;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -792,12 +811,11 @@ modbusmq_tcp_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_tcp_write_mask_registers( struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int and_mask, int or_mask)
 {
-    modbusmq_tcp_frame_init(context, frame, MODBUSMQ_WRITE_MULTIPLE_REGISTERS, addr, and_mask);
-    
-    frame->buf[frame->length++] = or_mask >> 8;
-    frame->buf[frame->length++] = or_mask & 0x00ff;
-
-    return frame->length;
+    //
+    // Header only: unit, function, address, AND-mask. The OR-mask is appended
+    // by modbusmq_frame_write_mask_registers().
+    //
+    return modbusmq_tcp_frame_init(context, frame, MODBUSMQ_MASK_WRITE_REGISTER, addr, and_mask);
 }
 
 //////////////////////////////////////////////////////////////////////////////

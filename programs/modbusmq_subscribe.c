@@ -121,8 +121,6 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         *modbusmq_config = modbusmq_config_get();
     int
         function = modbusmq_frame_function(context, &msg->frame[1]);
-    int
-        nb       = modbusmq_frame_nbytes(context, &msg->frame[1]);
     uint8_t
         *data    = modbusmq_frame_data(context, &msg->frame[1]);
     char

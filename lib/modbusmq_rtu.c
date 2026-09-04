@@ -764,7 +764,27 @@ modbusmq_rtu_frame_naddr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_rtu_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
-    return frame->buf[2];
+    //
+    // Only a read response carries a byte count. In a write echo buf[2] is the
+    // high byte of the address and in an exception it is the error code, so
+    // handing either back as a length invites a caller to read the frame as
+    // something it is not.
+    //
+    if (frame->is_writer)
+    {
+        return -1;
+    }
+
+    switch (frame->buf[1])
+    {
+    case MODBUSMQ_READ_COILS:
+    case MODBUSMQ_READ_DISCRETE_INPUTS:
+    case MODBUSMQ_READ_HOLDING_REGISTERS:
+    case MODBUSMQ_READ_INPUT_REGISTERS:
+        return frame->buf[2];
+    default:
+        return -1;
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -942,11 +962,12 @@ modbusmq_rtu_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_rtu_write_mask_registers( struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int and_mask, int or_mask)
 {
-    modbusmq_rtu_frame_init(context, frame, MODBUSMQ_WRITE_MULTIPLE_REGISTERS, addr, and_mask);
-    frame->buf[frame->length++] = or_mask >> 8;
-    frame->buf[frame->length++] = or_mask & 0x00ff;
-
-    return frame->length;
+    //
+    // Header only: slave, function, address, AND-mask. The OR-mask is appended
+    // by modbusmq_frame_write_mask_registers(), the same split the other write
+    // functions use.
+    //
+    return modbusmq_rtu_frame_init(context, frame, MODBUSMQ_MASK_WRITE_REGISTER, addr, and_mask);
 }
 
 
@@ -1067,8 +1088,15 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
 
     if (expected_nbytes < 0)
     {
-        // write functions: slave(1) + function(1) + addr(2) + value(2) + CRC(2)
-        newlen = 8;
+        //
+        // Write echoes have no byte count, so their size comes from the
+        // function. Mask write returns both masks, which is two bytes more
+        // than the rest.
+        //
+        // slave(1) + function(1) + addr(2) + value(2) + CRC(2), and mask write
+        // additionally echoes the OR-mask(2)
+        //
+        newlen = (modbusmq_rtu_frame_function(context, writer) == MODBUSMQ_MASK_WRITE_REGISTER) ? 10 : 8;
     }
     else if (reader->buf[2] != expected_nbytes)
     {
@@ -1150,8 +1178,9 @@ modbusmq_rtu_frame_drain(modbusmq_context_t *context, modbusmq_frame_t *frame)
     }
     else
     {
-        // write-function echo: slave + function + addr(2) + value(2) + crc(2)
-        length = 8;
+        // write-function echo: slave + function + addr(2) + value(2) + crc(2),
+        // and mask write echoes both masks, so two bytes more
+        length = (function == MODBUSMQ_MASK_WRITE_REGISTER) ? 10 : 8;
     }
 
     //
