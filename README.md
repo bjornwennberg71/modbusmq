@@ -60,6 +60,9 @@ The result is a lightweight, extensible system that can communicate with multipl
 - **modbusmq_server** — virtual Modbus device emulator returning `.config` default values  
 
 ### Configuration
+**[SUBSCRIBE.md](SUBSCRIBE.md) — how to set up `modbusmq_subscribe` and write its config file.**
+Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
+
 `.config` files describe:
 - Device connection (TCP or RTU)  
 - Registers/coils to read  
@@ -82,6 +85,8 @@ modbusmq/
 ├── programs/modbusmq_query.c # One-shot query tool
 ├── programs/modbusmq_server.c # Virtual Modbus device emulator
 ├── config/*.config # Device configuration examples
+├── SUBSCRIBE.md # Setting up modbusmq_subscribe
+├── config/CONFIG.md # Config file key reference
 
 ```
 
@@ -127,7 +132,10 @@ config/*.config
 # Programs
 ## modbusmq_subscribe
 
-Continuous Modbus polling with .config files.
+Continuous Modbus polling with .config files, and writing back to registers and
+coils from MQTT.
+
+**Setting one up: [SUBSCRIBE.md](SUBSCRIBE.md).**
 
 Examples:
 ```
