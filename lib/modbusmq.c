@@ -166,10 +166,10 @@ modbusmq_free(modbusmq_context_t *context)
 
     context->cb.modbusmq_free(context);
     
-    if (context->fd > 0)
+    if (context->fd >= 0)
     {
         close(context->fd);
-        context->fd = 0;
+        context->fd = -1;
     }
 
     {
@@ -432,7 +432,7 @@ modbusmq_close(modbusmq_context_t *context)
     }
 
     close(context->fd);
-    context->fd = 0;
+    context->fd = -1;
     return 0;
 }
 
@@ -2957,8 +2957,8 @@ modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sle
  * @param context: allocated context
  * @param sleep_time: out parameter with maximum time to sleep in milliseconds
  * @param events: out parameter with POLLIN/POLLOUT mask for Modbusmq fd
- * 
- * @return 0 on success, < 0 on error
+ *
+ * @return the descriptor to poll, or -1 when there is no connection
  */
 
 int
@@ -2970,9 +2970,9 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         return -1;
     }
 
-    if (context->fd <= 0)
+    if (context->fd < 0)
     {
-        return 0;
+        return -1;
     }
 
     
@@ -3053,7 +3053,9 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
     wrapper = context->msg_wrapper_head;
     if (!wrapper)
     {
-        return 0;
+        // queue empty, but the connection is still live — the caller polls
+        // the fd anyway so it notices POLLERR/POLLHUP.
+        return context->fd;
     }
 
     modbusmq_frame_t
@@ -3086,7 +3088,10 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         return context->fd;
     }
 
-    return 0;
+    // neither frame needs write nor read right now, but the connection is
+    // still live — the caller polls the fd anyway so it notices
+    // POLLERR/POLLHUP.
+    return context->fd;
 }
 
 
@@ -3274,7 +3279,18 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         *wrapper = context->msg_wrapper_head;
     if (!wrapper)
     {
-        // nothing to read/write
+        //
+        // Nothing queued, but the caller polls the descriptor even when idle so
+        // a link that drops between requests is noticed now rather than when
+        // the next timer fires and finds it dead.
+        //
+        if (revents & (POLLERR | POLLHUP))
+        {
+            context->err++;
+            modbusmq_logf(LOG_ERROR, "connection closed while idle (revents=0x%x)\n", revents);
+            return MODBUSMQ_ERR_TRANSPORT;
+        }
+
         return 0;
     }
     

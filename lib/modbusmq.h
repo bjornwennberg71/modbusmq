@@ -16,7 +16,7 @@
 
 #define MODBUSMQ_VERSION_MAJOR 2
 #define MODBUSMQ_VERSION_MINOR 1
-#define MODBUSMQ_VERSION_BUILD 0
+#define MODBUSMQ_VERSION_BUILD 1
 
 #define MODBUSMQ_STRINGIFY_(x) #x
 #define MODBUSMQ_STRINGIFY(x)  MODBUSMQ_STRINGIFY_(x)
@@ -119,7 +119,8 @@ extern int  modbusmq_set_config(struct modbusmq_context_t *context, struct modbu
 extern int  modbusmq_tcp_flush( struct modbusmq_context_t *context);
     // run-handler (for use in production)
 extern int  modbusmq_loop_write_read(struct modbusmq_context_t *context, int revents);
-    // fills in correct descriptors to be used in select. returns recommended sleep time and filedescriptor
+    // fills in correct descriptors to be used in select. returns recommended sleep time and filedescriptor,
+    // or -1 when there is no connection
 extern int modbusmq_loop_prepare(    struct modbusmq_context_t *context, millitime_t *sleep_time, int16_t *poll_events);
 
     // callbacks

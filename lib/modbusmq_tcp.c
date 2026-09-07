@@ -99,6 +99,13 @@ modbusmq_tcp_context(const char *pzConnectString)
     }
     memset(context, 0, sizeof(modbusmq_context_t));
 
+    //
+    // fd 0 is a real descriptor (a process started with stdin closed gets
+    // its device there on the next open), so it cannot double as "not
+    // connected" — -1 is the only safe sentinel.
+    //
+    context->fd = -1;
+
     context->cb = (modbusmq_cb_t){
         .modbusmq_free             = modbusmq_tcp_free,
         .modbusmq_connect          = modbusmq_tcp_connect,
@@ -195,7 +202,7 @@ modbusmq_tcp_free(modbusmq_context_t *context)
 int
 modbusmq_tcp_flush(modbusmq_context_t *context)
 {
-    if (!context || context->fd <= 0)
+    if (!context || context->fd < 0)
     {
         return 0;
     }

@@ -83,6 +83,14 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
         exit(2);
     }
     memset(context, 0, sizeof(modbusmq_context_t));
+
+    //
+    // fd 0 is a real descriptor (a process started with stdin closed gets
+    // its device there on the next open), so it cannot double as "not
+    // connected" — -1 is the only safe sentinel.
+    //
+    context->fd = -1;
+
     context->cb = (modbusmq_cb_t){
         .modbusmq_free             = modbusmq_rtu_free,
         .modbusmq_connect          = modbusmq_rtu_connect,
@@ -216,7 +224,7 @@ modbusmq_rtu_flush(modbusmq_context_t *context)
         return -1;
     }
 
-    if (context->fd <= 0)
+    if (context->fd < 0)
     {
         return 0;
     }

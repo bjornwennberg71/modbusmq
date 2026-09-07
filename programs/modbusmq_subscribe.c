@@ -889,10 +889,25 @@ main(int argc, char **argv)
                 int
                     modbusmq_fd = modbusmq_loop_prepare(context, &millisleep, &pollfds[nfds].events);
 
-                pollfds[nfds].fd = modbusmq_fd;
-                pollfds[nfds].events |= POLLERR | POLLHUP;
-                modbus_pollfd_idx = nfds;
-                nfds++;
+                if (modbusmq_fd < 0)
+                {
+                    // fd was live a moment ago (modbus_connected is only set
+                    // once modbusmq_connect() succeeds) but is gone now —
+                    // treat this the same as a failed poll/read below and
+                    // fall back into the reconnect path instead of polling
+                    // a stale descriptor.
+                    modbusmq_logf(LOG_ERROR, "Modbus: connection lost, will reconnect\n");
+                    modbusmq_reset_queue(context);
+                    GI.modbus_connected = 0;
+                    GI.modbus_reconnect_at_ms = time_now + MODBUS_RECONNECT_INTERVAL_MS;
+                }
+                else
+                {
+                    pollfds[nfds].fd = modbusmq_fd;
+                    pollfds[nfds].events |= POLLERR | POLLHUP;
+                    modbus_pollfd_idx = nfds;
+                    nfds++;
+                }
             }
             else
             {
