@@ -37,12 +37,10 @@ typedef struct modbusmq_msg_wrapper_t
 {
     int                   flags;
 
-                          // Set once an error has been reported for this
-                          // request. A transport error reports the head of the
-                          // queue and then leaves it there for the caller to
-                          // reset, so without this the reset reports it again
-                          // and the caller sees one failure twice.
-    uint8_t               reported;
+                          // When this wrapper became head of the queue, so a
+                          // request that never gets sent (link never becomes
+                          // writable) can still be timed out. 0 = not yet.
+    millitime_t           head_since_ms;
 
     modbusmq_msg_t          msg;
     struct modbusmq_msg_wrapper_t *next;

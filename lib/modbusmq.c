@@ -473,15 +473,9 @@ modbusmq_reset_queue(modbusmq_context_t *context)
         // received it, and nothing anywhere said so. A dropped command has to
         // be as visible as one that timed out.
         //
-        // The request that was in flight when the link died has already been
-        // reported by the loop, so skip it rather than report it twice.
-        //
-        if (!elem->reported)
-        {
-            modbusmq_logf(LOG_ERROR, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
-                          modbusmq_msg_tag(context, &elem->msg));
-            modbusmq_report_error(context, &elem->msg, MODBUSMQ_ERR_TRANSPORT);
-        }
+        modbusmq_logf(LOG_ERROR, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
+                      modbusmq_msg_tag(context, &elem->msg));
+        modbusmq_report_error(context, &elem->msg, MODBUSMQ_ERR_TRANSPORT);
 
         free(elem);
         elem = next;
@@ -2986,6 +2980,11 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         millitime_t
             time_now = millitime();
 
+        if (wrapper->head_since_ms == 0)
+        {
+            wrapper->head_since_ms = time_now;
+        }
+
         modbusmq_frame_t
             *head_writer = wrapper->msg.frame[0].is_writer ? &wrapper->msg.frame[0] : &wrapper->msg.frame[1];
 
@@ -3046,8 +3045,33 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
             modbusmq_flush(context);
             context->resync_pending = 1;
         }
+        else if (!request_sent && (time_now - wrapper->head_since_ms) >= context->frame_timeout_ms)
+        {
+            //
+            // The clock here runs from when this wrapper became head of the
+            // queue, not from when it was posted. In parallel query mode a
+            // request sits behind others until it is its turn; timing it
+            // from post would discard it the moment it reached the head on
+            // a slow RTU link, before it ever had a chance to go out.
+            //
+            modbusmq_logf(LOG_ERROR, "%s not sent within %d ms, the link never became writable. action: discard request and continue\n",
+                          modbusmq_msg_tag(context, &wrapper->msg),
+                          context->frame_timeout_ms);
+
+            modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TIMEOUT);
+
+            context->msg_wrapper_head = context->msg_wrapper_head->next;
+            free(wrapper);
+            wrapper = NULL;
+
+            context->err++;
+            context->last_write_ms = 0;
+
+            modbusmq_flush(context);
+            context->resync_pending = 1;
+        }
     }
-    
+
     modbusmq_loop_prepare_subscription(context, sleep_time, events);
     
     wrapper = context->msg_wrapper_head;
@@ -3325,7 +3349,16 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         modbusmq_logf(LOG_ERROR, "%s transport error rc=%d, err=%s\n",
                       modbusmq_msg_tag(context, &wrapper->msg), rc, strerror(errno));
         modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TRANSPORT);
-        wrapper->reported = 1;
+
+        //
+        // The request is dead either way once the transport has failed.
+        // Unlink and free it here so a caller that does not call
+        // modbusmq_reset_queue() isn't left blocked behind it, and so it
+        // doesn't get the same failure reported again on every subsequent
+        // poll.
+        //
+        context->msg_wrapper_head = wrapper->next;
+        free(wrapper);
     }
     else if (rc > 0)
     {
