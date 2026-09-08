@@ -280,6 +280,94 @@ modbusmq_config_apply_format_version(modbusmq_config_t *config, const char *file
     }
 }
 
+//////////////////////////////////////////////////////////////////////////////
+//
+// Resolve publish-rate-limiting inheritance across three levels: a channel
+// that does not set one of these itself takes its input's value, and one an
+// input does not set either falls back to the config-wide publish.* default.
+// Each key is resolved independently — an input opting into min_change does
+// not drag min_interval along with it for a channel that only wants that one.
+//
+// Doing this once here, right after parsing, means the runtime
+// (modbusmq_channel_publish_decide()) only ever reads the channel fields and
+// never has to reach up through the input or the config to find a default.
+//
+static void
+modbusmq_config_apply_publish_defaults(modbusmq_config_t *config)
+{
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &config->inputs[i];
+
+        for(int c = 0; c < input->channel_max; ++c)
+        {
+            modbusmq_channel_t
+                *channel = &input->channels[c];
+
+            if (!channel->has_on_change)
+            {
+                if (input->has_on_change)
+                {
+                    channel->on_change = input->on_change;
+                }
+                else if (config->has_publish_on_change)
+                {
+                    channel->on_change = config->publish_on_change;
+                }
+            }
+
+            if (!channel->has_min_change)
+            {
+                if (input->has_min_change)
+                {
+                    channel->min_change = input->min_change;
+                }
+                else if (config->has_publish_min_change)
+                {
+                    channel->min_change = config->publish_min_change;
+                }
+            }
+
+            if (!channel->has_min_change_rel)
+            {
+                if (input->has_min_change_rel)
+                {
+                    channel->min_change_rel = input->min_change_rel;
+                }
+                else if (config->has_publish_min_change_rel)
+                {
+                    channel->min_change_rel = config->publish_min_change_rel;
+                }
+            }
+
+            if (!channel->has_min_interval)
+            {
+                if (input->has_min_interval)
+                {
+                    channel->min_interval = input->min_interval;
+                }
+                else if (config->has_publish_min_interval)
+                {
+                    channel->min_interval = config->publish_min_interval;
+                }
+            }
+
+            if (!channel->has_max_interval)
+            {
+                if (input->has_max_interval)
+                {
+                    channel->max_interval = input->max_interval;
+                }
+                else if (config->has_publish_max_interval)
+                {
+                    channel->max_interval = config->publish_max_interval;
+                }
+            }
+        }
+    }
+}
+
 int modbusmq_config_query_mode(const char *key)
 {
     if (strcmp(key, "parallell") == 0)
@@ -572,6 +660,74 @@ modbusmq_config_parse(const char *filename)
             {
                 input->interval = strtod(value, NULL);
             }
+            //
+            // Per-input defaults for the publish rate-limiting keys. Same
+            // validation as the per-channel ones below; the two never
+            // interact until modbusmq_config_apply_publish_defaults() copies
+            // the input's value into whichever channels leave theirs unset.
+            //
+            else if (strcmp(input_key, "on_change") == 0)
+            {
+                int
+                    on_change = config_boolean(value);
+                if (on_change < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                input->on_change     = on_change;
+                input->has_on_change = 1;
+            }
+            else if (strcmp(input_key, "min_change_rel") == 0)
+            {
+                input->min_change_rel = strtod(value, NULL);
+                if (input->min_change_rel < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                input->has_min_change_rel = 1;
+            }
+            else if (strcmp(input_key, "min_change") == 0)
+            {
+                input->min_change = strtod(value, NULL);
+                if (input->min_change < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                input->has_min_change = 1;
+            }
+            else if (strcmp(input_key, "min_interval") == 0)
+            {
+                input->min_interval = (int)strtol(value, NULL, 0);
+                if (input->min_interval < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                input->has_min_interval = 1;
+            }
+            else if (strcmp(input_key, "max_interval") == 0)
+            {
+                input->max_interval = (int)strtol(value, NULL, 0);
+                if (input->max_interval < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                input->has_max_interval = 1;
+            }
             else if (strcmp(input_key, "channel.max") == 0)
             {
                 if (input->channels)
@@ -688,6 +844,80 @@ modbusmq_config_parse(const char *filename)
                         return -1;
                     }
                     channel->has_qos = 1;
+                }
+                else if (strcmp(channel_key, "decimals") == 0)
+                {
+                    channel->decimals = (int)strtol(value, NULL, 0);
+                    if (channel->decimals < 0 || channel->decimals > 9)
+                    {
+                        fprintf(stderr, "%d: %s=%s: decimals must be between 0 and 9\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_decimals = 1;
+                }
+                else if (strcmp(channel_key, "on_change") == 0)
+                {
+                    int
+                        on_change = config_boolean(value);
+                    if (on_change < 0)
+                    {
+                        fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->on_change     = on_change;
+                    channel->has_on_change = 1;
+                }
+                else if (strcmp(channel_key, "min_change") == 0)
+                {
+                    channel->min_change = strtod(value, NULL);
+                    if (channel->min_change < 0)
+                    {
+                        fprintf(stderr, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_min_change = 1;
+                }
+                else if (strcmp(channel_key, "min_change_rel") == 0)
+                {
+                    channel->min_change_rel = strtod(value, NULL);
+                    if (channel->min_change_rel < 0)
+                    {
+                        fprintf(stderr, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_min_change_rel = 1;
+                }
+                else if (strcmp(channel_key, "min_interval") == 0)
+                {
+                    channel->min_interval = (int)strtol(value, NULL, 0);
+                    if (channel->min_interval < 0)
+                    {
+                        fprintf(stderr, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_min_interval = 1;
+                }
+                else if (strcmp(channel_key, "max_interval") == 0)
+                {
+                    channel->max_interval = (int)strtol(value, NULL, 0);
+                    if (channel->max_interval < 0)
+                    {
+                        fprintf(stderr, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->has_max_interval = 1;
                 }
             }
             else
@@ -891,6 +1121,74 @@ modbusmq_config_parse(const char *filename)
         {
             config_set_string(&modbusmq_config->mqtt_topic_prefix, value);
         }
+        //
+        // Config-wide defaults for the publish rate-limiting keys — the
+        // bottom rung under input.N.* and input.N.channel.M.*. Same
+        // validation as those; modbusmq_config_apply_publish_defaults()
+        // resolves the three levels down onto each channel after parsing.
+        //
+        else if (strcmp(key, "publish.on_change") == 0)
+        {
+            int
+                on_change = config_boolean(value);
+            if (on_change < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->publish_on_change     = on_change;
+            modbusmq_config->has_publish_on_change = 1;
+        }
+        else if (strcmp(key, "publish.min_change") == 0)
+        {
+            modbusmq_config->publish_min_change = strtod(value, NULL);
+            if (modbusmq_config->publish_min_change < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->has_publish_min_change = 1;
+        }
+        else if (strcmp(key, "publish.min_change_rel") == 0)
+        {
+            modbusmq_config->publish_min_change_rel = strtod(value, NULL);
+            if (modbusmq_config->publish_min_change_rel < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->has_publish_min_change_rel = 1;
+        }
+        else if (strcmp(key, "publish.min_interval") == 0)
+        {
+            modbusmq_config->publish_min_interval = (int)strtol(value, NULL, 0);
+            if (modbusmq_config->publish_min_interval < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->has_publish_min_interval = 1;
+        }
+        else if (strcmp(key, "publish.max_interval") == 0)
+        {
+            modbusmq_config->publish_max_interval = (int)strtol(value, NULL, 0);
+            if (modbusmq_config->publish_max_interval < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->has_publish_max_interval = 1;
+        }
         else
         {
             if (strlen(key))
@@ -909,6 +1207,12 @@ modbusmq_config_parse(const char *filename)
     // cannot be decided while parsing.
     //
     modbusmq_config_apply_format_version(modbusmq_config, filename);
+
+    //
+    // Same idea, unrelated concern: resolve input-level publish defaults down
+    // onto their channels before anything runs, so the runtime never has to.
+    //
+    modbusmq_config_apply_publish_defaults(modbusmq_config);
 
     //
     // A coil or discrete input carries one bit per address, so its channels
@@ -1177,8 +1481,38 @@ modbusmq_config_close()
 }
 
 //////////////////////////////////////////////////////////////////////////////
-// 
-// 
+//
+// Clear every channel's publish state. See the declaration in
+// modbusmq_config.h for when to call this.
+void
+modbusmq_config_reset_publish_state(modbusmq_config_t *config)
+{
+    if (!config)
+    {
+        return;
+    }
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &config->inputs[i];
+
+        for(int c = 0; c < input->channel_max; ++c)
+        {
+            modbusmq_channel_t
+                *channel = &input->channels[c];
+
+            channel->published       = 0;
+            channel->last_value      = 0;
+            channel->last_text[0]    = 0;
+            channel->last_publish_ms = 0;
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+//
 modbusmq_config_t *
 modbusmq_config_get()
 {

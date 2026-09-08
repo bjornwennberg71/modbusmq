@@ -119,14 +119,9 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
 {
     modbusmq_config_t
         *modbusmq_config = modbusmq_config_get();
-    int
-        function = modbusmq_frame_function(context, &msg->frame[1]);
-    uint8_t
-        *data    = modbusmq_frame_data(context, &msg->frame[1]);
     char
         value[100];
-    int
-        value_len = 4;
+
     for(int c = 0; c < input->channel_max; ++c)
     {
         modbusmq_channel_t
@@ -144,8 +139,20 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         float
             f = modbusmq_read_channel(context, msg, input, channel);
 
-                
-        sprintf(value, "%.3f", f);
+        //
+        // min_change/min_interval/max_interval decide whether this reading is
+        // worth sending at all — a status word flooding the broker unchanged
+        // every poll helps nobody. The formatted value is still logged either
+        // way, at debug level, so -v shows what a suppressed channel would
+        // have published.
+        //
+        modbusmq_channel_format_value(input, channel, f, value, sizeof(value));
+
+        if (modbusmq_channel_publish_decide(channel, f, value, millitime()) == 0)
+        {
+            modbusmq_logf(LOG_DEBUG, "%s=%s suppressed (unchanged or too soon)\n", channel->topic, value);
+            continue;
+        }
 
 #if MQTT_ENABLED
         if (GI.has_mqtt && GI.mqtt_connected)
@@ -173,11 +180,7 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
             }
         }
 #endif
-        char
-            azLine[200] = {0};
-        
-        modbusmq_logf(LOG_INFO, "%s=%s %s\n", channel->topic, value, azLine);
-        
+        modbusmq_logf(LOG_INFO, "%s=%s\n", channel->topic, value);
     }
     fflush(stdout);
 }
@@ -605,6 +608,14 @@ mqtt_try_reconnect(modbusmq_connect_t *connect)
         // quiet after the first blip and nothing says so.
         //
         mqtt_subscribe_writes();
+        //
+        // Also a clean session for retained state: any channel gated by
+        // min_change would otherwise stay silent until its value happens to
+        // move again, since it still believes the broker holds its last
+        // published reading. Treat every channel as unpublished so the next
+        // poll of each one goes out fresh.
+        //
+        modbusmq_config_reset_publish_state(modbusmq_config_get());
         return 1;
     }
  
@@ -804,6 +815,13 @@ main(int argc, char **argv)
         {
             GI.mqtt_connected = 1;
             mqtt_subscribe_writes();
+            //
+            // A no-op here — every channel starts unpublished anyway — but
+            // kept for symmetry with mqtt_try_reconnect() so both places the
+            // connection is (re)established agree on what "just connected"
+            // means.
+            //
+            modbusmq_config_reset_publish_state(modbusmq_config_get());
         }
     }
 #else

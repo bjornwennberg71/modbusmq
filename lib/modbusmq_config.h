@@ -11,6 +11,13 @@
 
 #include <stdint.h>
 
+//
+// millitime_t, for the runtime publish-rate-limiting timestamps below. Pulled
+// in here rather than duplicated as int64_t, since modbusmq_time.h has no
+// dependency back on this header.
+//
+#include "modbusmq_time.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -135,6 +142,50 @@ typedef struct modbusmq_channel_t
     uint8_t                 has_retain;
     int                     qos;
     uint8_t                 has_qos;
+
+                                   // Decimal places when formatting the value
+                                   // for output/publish. Unset means fall back
+                                   // to the type/format-driven default — see
+                                   // modbusmq_channel_format_value().
+    int                     decimals;
+    uint8_t                 has_decimals;
+
+                                   // Publish rate limiting. Unset means take
+                                   // the input-level default, and failing that
+                                   // the config-wide publish.* default,
+                                   // resolved once by
+                                   // modbusmq_config_apply_publish_defaults()
+                                   // right after parsing — the runtime never
+                                   // has to fall back to the input or config.
+    uint8_t                 on_change; // suppress unless the printed text changed
+    float                   min_change;
+    float                   min_change_rel; // fraction of the value, e.g. 0.001 = 0.1%
+    int                     min_interval;
+    int                     max_interval;
+    uint8_t                 has_on_change;
+    uint8_t                 has_min_change;
+    uint8_t                 has_min_change_rel;
+    uint8_t                 has_min_interval;
+    uint8_t                 has_max_interval;
+
+                                   // Runtime state for the decision above, not
+                                   // config: what was last actually published,
+                                   // and when. modbusmq_channel_publish_decide()
+                                   // owns these; modbusmq_config_reset_publish_state()
+                                   // clears them on an MQTT (re)connect so a
+                                   // fresh subscriber is not left waiting on a
+                                   // suppressed channel.
+                                   //
+                                   // last_text is what "unchanged" is actually
+                                   // judged against — the printed form, at the
+                                   // channel's own decimal count, not the raw
+                                   // float. last_value still backs min_change /
+                                   // min_change_rel, which are magnitude checks
+                                   // rather than text comparisons.
+    float                   last_value;
+    char                    last_text[32];
+    millitime_t             last_publish_ms;
+    uint8_t                 published;
 } modbusmq_channel_t;
     
 //
@@ -150,6 +201,23 @@ typedef struct modbusmq_input_t
     int                 interval;
     int                 channel_max;
     struct modbusmq_channel_t *channels;
+
+                                   // Per-input defaults for the publish rate
+                                   // limiting keys above. Copied into any
+                                   // channel that does not set its own by
+                                   // modbusmq_config_apply_publish_defaults();
+                                   // nothing outside config parsing reads
+                                   // these directly.
+    uint8_t             on_change;
+    float               min_change;
+    float               min_change_rel;
+    int                 min_interval;
+    int                 max_interval;
+    uint8_t             has_on_change;
+    uint8_t             has_min_change;
+    uint8_t             has_min_change_rel;
+    uint8_t             has_min_interval;
+    uint8_t             has_max_interval;
 } modbusmq_input_t;
 
 //
@@ -230,11 +298,37 @@ typedef struct modbusmq_config_t
     char               *mqtt_topic_prefix;
     int                 mqtt_retain; // default for every published channel
     int                 mqtt_qos;
+
+                                   // Config-wide defaults for the publish
+                                   // rate-limiting keys, the bottom rung under
+                                   // input and channel: a channel takes its
+                                   // own value, else its input's, else this
+                                   // one. See modbusmq_config_apply_publish_defaults().
+    uint8_t             publish_on_change;
+    float               publish_min_change;
+    float               publish_min_change_rel;
+    int                 publish_min_interval;
+    int                 publish_max_interval;
+    uint8_t             has_publish_on_change;
+    uint8_t             has_publish_min_change;
+    uint8_t             has_publish_min_change_rel;
+    uint8_t             has_publish_min_interval;
+    uint8_t             has_publish_max_interval;
 } modbusmq_config_t;
 
     
 extern int                 modbusmq_config_parse(const char *filename);
 extern modbusmq_config_t * modbusmq_config_get();
+
+//
+// Clear every channel's publish state (published/last_value/last_publish_ms).
+//
+// Call this whenever the MQTT connection is (re)established. A broker restart
+// forgets what we last sent it, so a channel gated by min_change would
+// otherwise stay silent until its value happens to move again — this makes
+// every channel look unpublished so the next poll of each one goes out fresh.
+//
+extern void                modbusmq_config_reset_publish_state(modbusmq_config_t *config);
 
 // utility functions
 // 

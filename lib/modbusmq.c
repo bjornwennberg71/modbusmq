@@ -949,6 +949,237 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
 
 /**
  *
+ * @brief decide, and count, the decimal places a channel value formats to
+ *
+ * An explicit channel.decimals always wins. Otherwise a bit channel (coil or
+ * discrete input) has nothing to round, a float format is printed to 3 places
+ * regardless of scaling, and an integer format follows its own mod divisor —
+ * mod=-100 means the raw value is hundredths, so 2 decimals recovers exactly
+ * what was divided out. A mod that does not divide evenly by a power of ten
+ * still needs *some* precision, so that case falls back to 3 rather than 0,
+ * which would round away everything mod just un-scaled.
+ *
+ * @param input  : input definition, for MODBUSMQ_TYPE_IS_BIT()
+ * @param channel: channel definition
+ *
+ * @return decimal places to print
+ */
+static int
+modbusmq_channel_decimals(const modbusmq_input_t *input, const modbusmq_channel_t *channel)
+{
+    if (channel->has_decimals)
+    {
+        return channel->decimals;
+    }
+
+    if (MODBUSMQ_TYPE_IS_BIT(input->type))
+    {
+        return 0;
+    }
+
+    if (channel->format == modbusmq_data_format_float_ba   ||
+        channel->format == modbusmq_data_format_float_abcd ||
+        channel->format == modbusmq_data_format_float_badc ||
+        channel->format == modbusmq_data_format_float_dcba ||
+        channel->format == modbusmq_data_format_float_cdab)
+    {
+        return 3;
+    }
+
+    if (channel->mod < 0)
+    {
+        //
+        // Peel factors of 10 off -mod by integer division rather than
+        // log10(): a float log10 of e.g. 1000 can land a hair under 3.0 and
+        // round the wrong way, and mod is an int to begin with.
+        //
+        int
+            remaining = -channel->mod;
+        int
+            tens = 0;
+
+        while (remaining > 1 && remaining % 10 == 0)
+        {
+            remaining /= 10;
+            tens++;
+        }
+
+        return (remaining == 1) ? tens : 3;
+    }
+
+    return 0;
+}
+
+/**
+ *
+ * @brief format an already-scaled channel value the way it should be printed/published
+ *
+ * See modbusmq_channel_decimals() for how the decimal count is chosen.
+ *
+ * @param input  : input definition
+ * @param channel: channel definition
+ * @param value  : the scaled value, as returned by modbusmq_read_channel()
+ * @param buf    : destination buffer
+ * @param len    : size of buf
+ *
+ * @return characters written (snprintf semantics), < 0 on bad arguments
+ */
+int
+modbusmq_channel_format_value(const modbusmq_input_t *input, const modbusmq_channel_t *channel, float value, char *buf, size_t len)
+{
+    if (!input || !channel || !buf || len == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int
+        decimals = modbusmq_channel_decimals(input, channel);
+    int
+        n = snprintf(buf, len, "%.*f", decimals, value);
+
+    //
+    // A value that is exactly zero, or close enough to round to it at this
+    // decimal count, can still carry a negative sign into the printed form
+    // ("-0", "-0.000") — technically what the float holds, but it reads as a
+    // sign flip that never happened. Strip the sign when every digit printed
+    // is a zero.
+    //
+    if (n > 0 && buf[0] == '-')
+    {
+        int
+            all_zero = 1;
+
+        for (int i = 1; i < n; ++i)
+        {
+            if (buf[i] != '0' && buf[i] != '.')
+            {
+                all_zero = 0;
+                break;
+            }
+        }
+
+        if (all_zero)
+        {
+            memmove(buf, buf + 1, n); // shift left, NUL included
+            n--;
+        }
+    }
+
+    return n;
+}
+
+//
+// Record a publish decision into the channel's runtime state. Shared by every
+// "publish" exit of modbusmq_channel_publish_decide() below so the bookkeeping
+// cannot drift out of step between them.
+//
+static void
+modbusmq_channel_publish_record(modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms)
+{
+    channel->last_value      = value;
+    channel->last_publish_ms = now_ms;
+    channel->published       = 1;
+
+    strncpy(channel->last_text, text, sizeof(channel->last_text) - 1);
+    channel->last_text[sizeof(channel->last_text) - 1] = 0;
+}
+
+/**
+ *
+ * @brief decide whether a channel value is worth publishing right now
+ *
+ * Order matters:
+ *   1. never published before                    -> publish, nothing to compare to
+ *   2. max_interval elapsed                       -> publish, this is the heartbeat
+ *   3. inside min_interval                        -> suppress, too soon since the last publish
+ *   4. on_change/min_change/min_change_rel active
+ *      and the printed text is unchanged          -> suppress
+ *   5. change below the min_change/min_change_rel
+ *      threshold                                  -> suppress, not worth a message
+ *   6. otherwise                                  -> publish
+ *
+ * "Unchanged" in step 4 is judged on text, not the float: two readings that
+ * print identically at this channel's decimal count are the same value as far
+ * as an MQTT subscriber can tell, so a raw value wobbling in the noise below
+ * the last printed digit must not count as a change. min_change/min_change_rel
+ * in step 5 are a magnitude gate instead, for a channel that wants to hold
+ * back a real but small movement even though the text technically differs.
+ *
+ * min_change_rel is a fraction of the larger of the last and new magnitudes,
+ * floored at 1.0 — without the floor a reading sitting near zero would need
+ * an arbitrarily tiny absolute change to clear a relative threshold, which is
+ * backwards from what "relative" is for.
+ *
+ * A changed value that arrives inside the min_interval window is dropped, not
+ * queued for later: the next poll still compares against the last *published*
+ * value and text (not the dropped one), so a real change is caught the first
+ * time a poll lands outside the window rather than lost.
+ *
+ * On a publish decision this also updates channel->last_value,
+ * channel->last_text, channel->last_publish_ms and channel->published, which
+ * is why the channel pointer is non-const.
+ *
+ * @param channel: channel definition and runtime state
+ * @param value  : the scaled value just read
+ * @param text   : that same value already formatted by modbusmq_channel_format_value()
+ * @param now_ms : current time, from millitime()
+ *
+ * @return 1 = publish, 0 = suppress, < 0 on bad arguments
+ */
+int
+modbusmq_channel_publish_decide(modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms)
+{
+    if (!channel || !text)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (!channel->published)
+    {
+        modbusmq_channel_publish_record(channel, value, text, now_ms);
+        return 1;
+    }
+
+    millitime_t
+        since_publish = now_ms - channel->last_publish_ms;
+
+    if (channel->max_interval > 0 && since_publish >= (millitime_t)channel->max_interval)
+    {
+        modbusmq_channel_publish_record(channel, value, text, now_ms);
+        return 1;
+    }
+
+    if (channel->min_interval > 0 && since_publish < (millitime_t)channel->min_interval)
+    {
+        return 0;
+    }
+
+    int
+        change_gated = (channel->on_change || channel->min_change > 0 || channel->min_change_rel > 0);
+
+    if (change_gated && strcmp(text, channel->last_text) == 0)
+    {
+        return 0;
+    }
+
+    float
+        ref = MODBUSMQ_MAX(fabsf(channel->last_value), fabsf(value));
+    float
+        threshold = MODBUSMQ_MAX(channel->min_change, channel->min_change_rel * MODBUSMQ_MAX(1.0f, ref));
+
+    if (threshold > 0 && fabsf(value - channel->last_value) < threshold)
+    {
+        return 0;
+    }
+
+    modbusmq_channel_publish_record(channel, value, text, now_ms);
+    return 1;
+}
+
+/**
+ *
  * @brief encode a raw value into wire bytes according to a data format
  *
  * The exact reverse of the byte orderings modbusmq_read_channel() decodes, and

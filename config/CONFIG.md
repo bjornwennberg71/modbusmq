@@ -110,6 +110,14 @@ input.N.address        = 0x0FFF           # start register address (hex or decim
 input.N.naddress       = 0x27             # number of registers to read
 input.N.interval       = 1000             # polling interval in milliseconds
 input.N.channel.max    = 13               # number of channels — must come before channel keys
+
+# Publish rate-limiting defaults for every channel on this input that does not
+# set its own — see "Publishing: decimals and rate limiting" below.
+input.N.on_change      = 0                # publish only when the printed text changes
+input.N.min_change     = 0                # publish only when the value moves by at least this much
+input.N.min_change_rel = 0                # ...or by at least this fraction of the value, whichever is larger
+input.N.min_interval   = 0                # never publish more often than this, in ms
+input.N.max_interval   = 0                # heartbeat: publish anyway after this long, in ms
 ```
 
 | type               | Modbus | Reads                    | `naddress` counts | `channel.offset` is |
@@ -178,6 +186,15 @@ input.N.channel.M.topic  = battery/module/1/voltage   # MQTT topic
 input.N.channel.M.value  = 4800     # default value (used by modbusmq_server)
 input.N.channel.M.retain = 0        # override mqtt.retain for this channel
 input.N.channel.M.qos    = 1        # override mqtt.qos for this channel
+
+# Formatting and publish rate limiting — see the section below. Each of these
+# overrides the input-level (and, failing that, the config-wide) default.
+input.N.channel.M.decimals       = 2     # decimal places when printing/publishing
+input.N.channel.M.on_change      = 0     # publish only when the printed text changes
+input.N.channel.M.min_change     = 0.5   # publish only when the value moves by at least this much
+input.N.channel.M.min_change_rel = 0.001 # ...or by at least this fraction of the value (0.001 = 0.1%)
+input.N.channel.M.min_interval   = 5000  # never publish more often than this, in ms
+input.N.channel.M.max_interval   = 60000 # heartbeat: publish anyway after this long, in ms
 ```
 
 Only `offset`, `format`, and `topic` are required. `add`, `mod`, `mul`, and `value` are optional.
@@ -240,6 +257,101 @@ if mul != 0: result = result * mul
 | -50       | 0      | -10  | 0   | -5.00            | sub-zero temperature, `int_ab` |
 | 10500     | -10000 | -10  | -1  | 50.00            | signed current with offset |
 | 434       | -400   | -10  | 0   | 3.4              | temperature with -40 offset |
+
+### Publishing: decimals and rate limiting
+
+Every channel value is printed the same way whether it goes to the log or to
+MQTT, and every poll is a candidate to publish — by default, every one of them
+does, which is what always happened before these settings existed.
+
+#### Decimal places
+
+Without `decimals` set, the number of decimal places follows from the type:
+
+- a coil or discrete input channel has nothing to round: **0 decimals**.
+- a float format (`float_abcd` and friends) always prints to **3 decimals**,
+  regardless of scaling.
+- an integer format follows its own `mod`: `mod = -100` means the raw value is
+  hundredths, so it prints to 2 decimals; `mod = -10` to 1; `mod` that is
+  positive, zero, or unset prints as a whole number. A negative `mod` that is
+  not a clean power of ten (`-25`, say) still needs some precision, so that
+  case falls back to 3 rather than rounding the value away.
+
+Set `input.N.channel.M.decimals` to override this for one channel.
+
+This is a formatting change only — it does not touch how a value is scaled,
+only how many digits of the already-scaled result get printed. A status word
+with no `mod` used to publish as `3.000`; it now publishes as `3`.
+
+#### Publish rate limiting
+
+Five keys decide whether a freshly polled value is worth sending at all, each
+settable per channel (`input.N.channel.M.<key>`), inherited from its input
+(`input.N.<key>`) when the channel does not set its own, and inherited from a
+config-wide default (`publish.<key>`) when neither does. All default to off,
+which is today's behaviour: publish every poll.
+
+- **`on_change`** (`0`/`1`, default `0`): when set, an unchanged value is
+  suppressed even if `min_change` is `0`.
+- **`min_change`** (a value in the channel's own engineering units, default
+  `0`): publish only when the value has moved by at least this much since the
+  last publish.
+- **`min_change_rel`** (a fraction, default `0`, e.g. `0.001` = 0.1%):
+  publish only when the value has moved by at least this fraction of itself.
+  The effective threshold is the *larger* of `min_change` and
+  `min_change_rel × value` — set both and whichever is more demanding at the
+  moment wins. A reading near zero is floored at a reference of `1.0` before
+  the fraction is applied, so a relative threshold never shrinks to nothing
+  just because the value passed through zero.
+- **`min_interval`** (milliseconds, default `0`): never publish this channel
+  more often than this. A change that arrives inside the window is **dropped,
+  not queued** — the next poll still compares against the last value actually
+  published, so a real change is still caught once the window has passed, just
+  not the instant it happened.
+- **`max_interval`** (milliseconds, default `0` = off): a heartbeat. Publish
+  regardless of the above once this long has passed since the last publish, so
+  a subscriber can tell the channel is still alive even when nothing changed.
+  Since this is only checked when a poll lands, it effectively **rounds up to
+  the next poll interval** — `max_interval = 3000` on a channel polled every
+  2000 ms fires around 4000 ms, not 3000.
+
+"Unchanged" for `on_change`, and for deciding whether the value moved at all,
+is judged on the **printed text** — at the channel's own decimal count — not
+the raw float. A reading wobbling in the noise below the last printed digit
+does not count as a change.
+
+Precedence, in order: never published yet always publishes; then the
+heartbeat; then `min_interval` can suppress a value that would otherwise go
+out; only then do `on_change`/`min_change`/`min_change_rel` get a say.
+
+**Recommended combinations:**
+
+```
+# Alarm / status bits: only publish when something actually changes, but say
+# you're still alive once an hour even if nothing did.
+input.2.channel.1.on_change    = 1
+input.2.channel.1.max_interval = 3600000
+
+# A temperature: ignore poll-to-poll jitter under half a degree, never more
+# than once every 5s, but heartbeat once a minute.
+input.1.channel.4.min_interval   = 5000
+input.1.channel.4.min_change     = 0.5
+input.1.channel.4.max_interval   = 60000
+
+# A power reading that swings across a wide range: a fixed min_change is
+# either too tight at high power or too loose at low power, so use a
+# percentage instead.
+input.1.channel.7.min_change_rel = 0.001
+```
+
+**Suppressed values are still visible** with `-v`, logged at debug level with
+the reason — nothing is silently dropped from the log, only from the broker.
+
+**Interaction with `retain`:** with `min_change` (or `on_change`/
+`min_change_rel`) set and `retain = 0`, a subscriber connecting between
+publishes sees nothing for this channel until it next changes or heartbeats.
+Pair a suppressive setting with either `retain = 1` or a `max_interval`, or a
+fresh subscriber can be left looking at a channel that appears dead.
 
 ---
 
@@ -379,6 +491,26 @@ Writes.
 If `mqtt.topic_prefix` is set, the final published topic is `prefix + channel.topic`. For example, with prefix `factory/line1/` and channel topic `battery/voltage`, the message is published to `factory/line1/battery/voltage`.
 
 MQTT publishing requires building with `-DMQTT_ENABLED=ON`.
+
+### `publish.*`: config-wide rate-limiting defaults
+
+The five keys from "Publishing: decimals and rate limiting" above also exist
+at the top level, as the bottom rung under `input.N.*` and
+`input.N.channel.M.*`:
+
+```
+publish.on_change      = 0
+publish.min_change     = 0
+publish.min_change_rel = 0
+publish.min_interval   = 0
+publish.max_interval   = 0
+```
+
+A channel takes its own value if it sets one, else its input's, else this one.
+Each key resolves independently, so `publish.min_interval = 1000` does not
+drag `on_change` along with it for a channel that never asked for it. Useful
+for a whole config that should default to, say, a one-minute heartbeat without
+repeating `max_interval = 60000` on every input.
 
 ---
 

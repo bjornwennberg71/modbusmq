@@ -11,12 +11,13 @@
 #include "modbusmq_time.h"
 
 #include <stdint.h>
+#include <stddef.h> // size_t, for modbusmq_channel_format_value()
 
 // DEFINES ///////////////////////////////////////////////////////////////////
 
 #define MODBUSMQ_VERSION_MAJOR 2
-#define MODBUSMQ_VERSION_MINOR 1
-#define MODBUSMQ_VERSION_BUILD 3
+#define MODBUSMQ_VERSION_MINOR 2
+#define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
 #define MODBUSMQ_STRINGIFY(x)  MODBUSMQ_STRINGIFY_(x)
@@ -220,6 +221,38 @@ extern float modbusmq_read_float_dcba(const uint8_t *data);
 extern float modbusmq_read_channel(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel);
 // 0 when the channel lies inside the received data, < 0 (and logged) when it does not
 extern int   modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel);
+
+//
+// Format an already-scaled channel value for output/publish, deciding the
+// decimal count the same way for modbusmq_subscribe and anything else that
+// prints a channel: an explicit channel.decimals wins, otherwise a bit
+// channel gets 0, a float format gets 3, and an integer format follows its
+// mod divisor (mod=-100 -> 2 decimals, and so on) — see modbusmq.c for the
+// exact rule. A negative-zero result ("-0", "-0.000") is normalised to plain
+// zero, since it reads as a sign flip that never happened.
+//
+// Returns the number of characters written, snprintf semantics; < 0 on error.
+//
+extern int   modbusmq_channel_format_value(const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel, float value, char *buf, size_t len);
+
+//
+// Decide whether a freshly read channel value should be published now, and
+// record the outcome into the channel's runtime state (last_value, last_text,
+// last_publish_ms, published) when it says yes.
+//
+// text is the value already formatted by modbusmq_channel_format_value() —
+// "unchanged" is judged on what would actually be printed/published, at the
+// channel's own decimal count, not on the raw float. Two readings a hair
+// apart that print identically are the same value as far as on_change /
+// min_change / min_change_rel are concerned.
+//
+// See modbusmq_channel_t in modbusmq_config.h for what on_change/min_change/
+// min_change_rel/min_interval/max_interval mean; the precedence between them
+// is documented on the implementation in modbusmq.c.
+//
+// Returns 1 = publish, 0 = suppress, < 0 on bad arguments.
+//
+extern int   modbusmq_channel_publish_decide(struct modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms);
 
     //
     // Encode a raw value as wire bytes for a data format. No scaling: the
