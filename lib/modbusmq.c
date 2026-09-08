@@ -788,6 +788,25 @@ modbusmq_format_size(int format)
     }
 }
 
+//
+// Byte position of a register channel inside the response.
+//
+// channel->offset is measured from input->address, the datasheet's base for
+// the block — in bytes, or in registers when input.offset_size is 2.
+// address_offset shifts only the request, and does so in registers, so the
+// response begins that many registers, two bytes each, past the base. The
+// two live in different units, which is why the shift is converted before it
+// is taken off rather than subtracted as-is.
+//
+static int
+modbusmq_channel_byte_offset(const modbusmq_config_t *config, const modbusmq_input_t *input, const modbusmq_channel_t *channel)
+{
+    int
+        offset_size = (config && config->offset_size > 0) ? config->offset_size : 1;
+
+    return channel->offset * offset_size - input->address_offset * 2;
+}
+
 /**
  *
  * @brief check that a channel lies inside the data actually received
@@ -840,7 +859,7 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
     }
 
     int
-        offset = (channel->offset - input->address_offset) * (config ? config->offset_size : 1);
+        offset = modbusmq_channel_byte_offset(config, input, channel);
     int
         size   = modbusmq_format_size(channel->format);
 
@@ -879,7 +898,7 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
     int
         value_len = 4;
     int
-        offset = (channel->offset  - input->address_offset) * config->offset_size;
+        offset = modbusmq_channel_byte_offset(config, input, channel);
     float
         f = 0;
 

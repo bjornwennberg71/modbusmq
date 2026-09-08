@@ -107,6 +107,7 @@ Replace `N` with the input number (1-based).
 input.N.slave          = 39               # Modbus slave / device ID
 input.N.type           = input_register   # see the table below
 input.N.address        = 0x0FFF           # start register address (hex or decimal)
+input.N.address_offset = 0        # registers/coils to skip at the start of the block, see below
 input.N.naddress       = 0x27             # number of registers to read
 input.N.interval       = 1000             # polling interval in milliseconds
 input.N.channel.max    = 13               # number of channels — must come before channel keys
@@ -126,6 +127,26 @@ input.N.max_interval   = 0                # heartbeat: publish anyway after this
 | `input_register`   | 04     | read-only registers      | registers         | bytes               |
 | `coil`             | 01     | read/write bits          | coils             | a coil index        |
 | `discrete_input`   | 02     | read-only bits           | inputs            | a bit index         |
+
+#### `address_offset`
+
+`address_offset` is added to `input.N.address` to form the address that goes
+out on the wire, and does nothing else. Use it when the first register or two
+of a documented block must not be read — reserved words some firmware faults
+on — without renumbering every channel: `channel.offset` stays measured from
+`input.N.address`, the datasheet's base, and the library takes the shift back
+out when it decodes. It counts registers for a register block and coils for a
+bit block, the same unit as `address`.
+
+```
+input.3.address        = 0x2000   # datasheet base
+input.3.address_offset = 1        # request actually starts at 0x2001
+input.3.naddress       = 2        # ...and covers 0x2001-0x2002
+input.3.channel.1.offset = 2      # register 0x2001, still counted from 0x2000
+```
+
+A channel that lands inside the skipped registers is outside the response and
+is reported as such, the same as any other out-of-range offset.
 
 ---
 
@@ -219,6 +240,14 @@ The name says the type, the suffix says the byte order: `ab` high byte first, `b
 | `float_badc`  | 4 bytes | IEEE 754 float, mixed-endian (BADC) |
 | `float_dcba`  | 4 bytes | IEEE 754 float, little-endian       |
 | `float_cdab`  | 4 bytes | IEEE 754 float, low word first      |
+
+The type also decides how the value is printed and published. An integer format
+publishes as a whole number, or with exactly as many decimals as its `mod`
+divisor implies: `uint_ab` with no `mod` gives `3`, `int_ab` with `mod = -10`
+gives `21.5`. A float format always publishes with three decimals, since the
+device gave no hint of its real precision. A bit publishes as `1` or `0`.
+`decimals` overrides any of this per channel; see "Publishing: decimals and
+rate limiting" below.
 
 Pick `uint_ab` for anything that cannot go negative — a speed, a voltage, a percentage, a status word — and `int_ab` for anything that can. Getting it wrong on a temperature is the classic failure: read unsigned, an ambient of −5.0 °C arrives as `0xFFCE`, decodes as 65486 and scales to 6548.6 °C.
 

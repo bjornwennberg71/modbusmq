@@ -75,6 +75,7 @@ Example configs included:
 - `accuvim_ii.config`  
 - `polarium.config`  
 - `shoto.config`
+- `example1.config` → `example3.config`, graded from minimal to fully fledged
 
 ---
 

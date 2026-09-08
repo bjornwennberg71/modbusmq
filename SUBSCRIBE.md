@@ -134,6 +134,11 @@ if mul != 0: result = result * mul
 `add` lands **before** the scaling. A device reporting tenths of a degree with a
 -40 offset is `add = -400`, `mod = -10`.
 
+**How it prints.** The format and `mod` settle the digits: an integer format
+publishes as a whole number, or with the decimals its divisor implies, so the
+temperature above goes out as `21.5` and a status word as `3`. A float format
+publishes with three decimals. Set `decimals` on the channel to override.
+
 ---
 
 ## 6. Check it without the device
@@ -299,4 +304,5 @@ info: factory/line1/sensors/inlet_temperature=21.5
 ## See also
 
 - [config/CONFIG.md](config/CONFIG.md) — every key, in reference form
+- config/example1.config → example3.config, graded from minimal to everything
 - [README.md](README.md) — the other two programs

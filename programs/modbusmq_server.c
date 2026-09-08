@@ -408,7 +408,6 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
 
     // this is TCP !
     int slave_id, function;
-    int write = 0; 
 
     modbusmq_frame_t
         *req = &connection->msg.frame[0],
@@ -427,7 +426,7 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
         int naddress       = req->buf[10] << 8 | req->buf[11];
 
         // Modbus caps a single read at 125 registers (250 bytes); this also
-        // keeps address_end and the fill loops below well within the fixed
+        // keeps the fill loops below well within the fixed
         // MODBUSMQ_FRAME_MAX response buffer (client-controlled naddress
         // used to be trusted unchecked here, which allowed a single crafted
         // request to overflow res->buf).
@@ -592,98 +591,68 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
             return 0;
         }
 
-        int address_end    = address_start + naddress * 2;
+        //
+        // Registers: lay every channel that falls inside the request into the
+        // response at its byte position, zeros everywhere else. The position
+        // is measured from where the request starts, not from input.address,
+        // so a block read through address_offset — or any client asking for a
+        // sub-range — gets each value where a real device would put it. It
+        // also means channels need not be listed in ascending order, and an
+        // odd byte offset is as good as an even one.
+        //
+        int
+            nbytes      = naddress * 2;
+        int
+            offset_size = config->offset_size > 0 ? config->offset_size : 1;
 
-        // input.1.slave          = 1
-        // input.1.type           = input_register
-        // input.1.address        = 0x0F
-        // input.1.naddress       = 6
-        // input.1.interval       = 5000
-        // input.1.channel.max    = 6
+        memset(&res->buf[9], 0, nbytes);
 
         for(int i = 0; i < config->input_max; ++i)
         {
             modbusmq_input_t
                 *input = &config->inputs[i];
 
-            // slave must match
-            // function must match
-            if (input->slave != slave_id || input->type  != function)
+            if (input->slave != slave_id || input->type != function)
             {
                 continue;
             }
 
-            //
-            // for each address in the request, fill in response
-            //
-            for(int c = 0; c < input->channel_max && c < naddress; ++c)
+            for(int c = 0; c < input->channel_max; ++c)
             {
                 modbusmq_channel_t
                     *channel = &input->channels[c];
-            
+
+                if (!channel->topic)
+                {
+                    continue; // an unused channel slot
+                }
+
                 int
-                    channel_address = input->address + channel->offset;
+                    pos = channel->offset * offset_size - (address_start - input->address) * 2;
 
-                while(address_start < channel_address && address_start < address_end)
+                if (pos < 0 || pos + channel->length > nbytes)
                 {
-                    res->buf[9 + write++] = 0;
-                    res->buf[9 + write++] = 0;
-                    address_start += 2;
+                    continue; // outside what was asked for
                 }
 
-                if (channel_address == address_start && address_start + channel->length <= address_end)
-                {
-                    // we have a matching address
-                    // # Nominal Voltage mV, 2 bytes, offset=0x000f
-                    // input.1.channel.1.offset  = 0
-                    // input.1.channel.1.format  = int_ab
-                    // input.1.channel.1.mod     = -1000
-                    // input.1.channel.1.topic   = voltage_nominal
+                int
+                    encoded = modbusmq_encode_value(channel->format, channel->value, &res->buf[9 + pos]);
 
-                    int encoded = modbusmq_encode_value(channel->format, channel->value, &res->buf[9 + write]);
-                    if (encoded > 0)
-                    {
-                        write        += encoded;
-                        address_start += encoded;
-                        printf("default_value: %02X = %.2f\n", address_start, channel->value);
-                    }
-                    else
-                    {
-                        printf("default_value: unsupported format %d for channel at %02X\n", (int)channel->format, channel_address);
-                    }
-                }
-                else
+                if (encoded <= 0)
                 {
-                    printf("default_value: no address match for %02X\n", channel_address);
+                    printf("default_value: unsupported format %d for channel %s\n", (int)channel->format, channel->topic);
+                    continue;
                 }
+
+                printf("default_value: %s = %.2f (reg 0x%04X)\n",
+                       channel->topic, channel->value, address_start + pos / 2);
             }
         }
 
-        // now fill in blanks at the end if we did not have enough channels to fulfill the request
-        while(address_start < address_end)
-        {
-            res->buf[9 + write++] = 0;
-            res->buf[9 + write++] = 0;
-            address_start += 2;
-        }
-    
-    
-        // payload is naddress * 2 (write) + unit_id + function + byte_count
-        res->buf[4] = ((write + 3 ) & 0xff00) >> 8;
-        res->buf[5] =  (write + 3 ) & 0x00ff ;
-    
-        // payload length= naddress *  (write)
-        res->buf[8] = write;
-
-        // header is 6 bytes
-        res->length = write + 3 + 6;
-
-        if (write <= 0)
-        {
-            // this means we did not find a respons, so mark the message with error
-            res->buf[7] |= 0x80; // function + 0x80
-            res->buf[8] = 0x02;  // illegal data access
-        }
+        res->buf[8] = nbytes;                        // byte count
+        res->buf[4] = ((nbytes + 3) & 0xff00) >> 8;  // payload length
+        res->buf[5] =  (nbytes + 3) & 0x00ff;
+        res->length = nbytes + 3 + 6;                // + 6 byte header
     }
     else if (context->rtu)
     {
