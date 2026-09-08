@@ -129,6 +129,8 @@ Because the unit of that address space is a bit, `channel.offset` counts **coils
 
 A bit channel takes **no `format`** — there is nothing to decode. Setting one is a config error, because it almost always means the block was written against the wrong address space.
 
+The four types are four separate address spaces on the device, so a `discrete_input` block at address `0x0000` and an `input_register` block at `0x0000` on the same slave are two different things and may both be present. Responses are matched back to their block by slave, type and address together.
+
 ```
 # DBS aircon alarms, read as discrete inputs
 input.2.slave       = 39

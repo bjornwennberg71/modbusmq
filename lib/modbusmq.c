@@ -2834,24 +2834,47 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
     {
         modbusmq_config_t
             *modbusmq_config = modbusmq_config_get();
-        
+
+        //
+        // Find the input block this response answers. Slave and address alone
+        // do not identify it: coils, discrete inputs, holding and input
+        // registers are four separate address spaces on the wire, so a status
+        // block at input_register 0x0000 and an alarm block at discrete_input
+        // 0x0000 are both legitimate and both match on address. Matching on
+        // the function code too keeps a 5-byte bit response from being decoded
+        // against a 31-register channel table, and register bytes from being
+        // published as alarm bits. modbusmq_input_t.type is the read function
+        // code, so it compares directly.
+        //
+        // Everything is taken from the request frame: it is what we sent, and
+        // it is the one the address_offset was applied to.
+        //
         int
-            input_max = modbusmq_config->input_max;
-        for(int i = 0; i < input_max; ++i)
+            function = modbusmq_frame_function(context, &wrapper->msg.frame[0]),
+            address  = modbusmq_frame_addr(    context, &wrapper->msg.frame[0]),
+            slave    = modbusmq_frame_slave(   context, &wrapper->msg.frame[0]),
+            matched  = 0;
+
+        for(int i = 0; i < modbusmq_config->input_max; ++i)
         {
             modbusmq_input_t
                 *input = &modbusmq_config->inputs[i];
-            int
-                address = modbusmq_frame_addr(context, &wrapper->msg.frame[0]);
-            int
-                slave = modbusmq_frame_slave(context, &wrapper->msg.frame[1]);
-            
-            if (input->address == address &&
-                input->slave   == slave)
+
+            if (input->slave != slave     ||
+                input->type  != function  ||
+                input->address + input->address_offset != address)
             {
-                // have the correct input-element
-                context->subscribe_cb(context, &wrapper->msg, input);
+                continue;
             }
+
+            context->subscribe_cb(context, &wrapper->msg, input);
+            matched++;
+        }
+
+        if (matched == 0)
+        {
+            modbusmq_logf(LOG_ERROR, "%s response matches no input block (function %d). action: dropped\n",
+                          modbusmq_msg_tag(context, &wrapper->msg), function);
         }
     }
                 
