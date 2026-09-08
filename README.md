@@ -67,6 +67,7 @@ Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key
 - Device connection (TCP or RTU)  
 - Registers/coils to read  
 - Scaling, formatting, and units  
+- Publish rate limiting: on-change, deadband, min/max interval  
 - Default values  
 - Optional MQTT topic mapping  
 
@@ -208,11 +209,11 @@ Sample `-v` output (one battery module shown, trimmed):
 ```
 info: writer: xmit=12 length=12 [00][01][00][00][00][06][27][04][0F][FF][00][27]
 info: reader: xmit=87 length=87 <00><01>...<00>
-info: battery/module/1/voltage=48.000
-info: battery/module/1/current=-50.000
-info: battery/module/1/remaining_capacity=80.000
-info: battery/module/1/soc=8.000
-info: battery/module/1/soh=1.000
+info: battery/module/1/voltage=48.00
+info: battery/module/1/current=-50.0
+info: battery/module/1/remaining_capacity=80.0
+info: battery/module/1/soc=8.00
+info: battery/module/1/soh=1.00
 ...and so on for each configured channel, repeated per battery module.
 ```
 

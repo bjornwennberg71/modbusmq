@@ -167,7 +167,7 @@ input.2.channel.2.topic  = alarms/door_open
 ```
 
 Bit channels take **no `format`** — there is nothing to decode, and setting one is
-an error. They publish `1.000` or `0.000`.
+an error. They publish `1` or `0`.
 
 Active low is handled with the scaling rather than a key of its own: `add = -1`
 with `mul = -1` turns a raw 0 into a published 1.
@@ -232,8 +232,11 @@ mqtt.retain       = 1                # default; 1/0, true/false, yes/no
 mqtt.qos          = 0                # default; 0, 1 or 2
 ```
 
-Published values are strings with three decimals, and the prefix applies to write
-topics as well as published ones.
+Published values are plain decimal strings. A bit publishes as `1` or `0`, an
+integer register with no divisor as a whole number, and one with `mod = -10` with
+one decimal, so the digits you get are the digits the device has. Override per
+channel with `decimals`. The prefix applies to write topics as well as published
+ones.
 
 `retain` suits slow-moving state — a subscriber that connects midway gets a value
 straight away rather than waiting a poll interval. It suits anything event-like
@@ -244,6 +247,26 @@ channel where the default is wrong:
 input.1.channel.4.retain = 0
 input.1.channel.4.qos    = 1
 ```
+
+By default every poll publishes. For anything that sits still for hours, such
+as alarm bits, publish only when it changes and heartbeat once an hour:
+
+```
+input.2.on_change    = 1          # whole block: only when the value changes
+input.2.max_interval = 3600000    # ...but say so once an hour regardless
+```
+
+Analog readings take a deadband and a floor on how often they go out:
+
+```
+input.1.channel.3.min_change   = 0.5     # ignore jitter under half a degree
+input.1.channel.3.min_interval = 5000    # never more often than every 5 s
+input.1.channel.3.max_interval = 60000   # heartbeat once a minute
+```
+
+The same keys work per channel, per input, or config-wide as `publish.*`. See
+"Publishing: decimals and rate limiting" in
+[config/CONFIG.md](config/CONFIG.md) for the exact rules.
 
 The defaults match what modbusmq has always done, so an existing config behaves
 exactly as before.
@@ -256,7 +279,7 @@ exactly as before.
 interval:
 
 ```
-info: factory/line1/sensors/inlet_temperature=21.500
+info: factory/line1/sensors/inlet_temperature=21.5
 ```
 
 | What you see | Usually means |
@@ -268,6 +291,7 @@ info: factory/line1/sensors/inlet_temperature=21.500
 | a value 10x or 100x off | `mod` sign or magnitude |
 | `config.version is X, so N channel(s) ... keep the old UNSIGNED meaning` | migrate to `config.version = 2.0` |
 | nothing published, no errors | built without `--enable-mqtt`, or no `mqtt.connect` |
+| `debug: ...=X suppressed (unchanged or too soon)` | rate limiting doing its job; only shown with `-v` |
 | frames lost on RTU | raise `modbusmq.rts_delay`, then `modbusmq.frame_timeout` |
 
 ---
