@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(modbusmq)
 
-# modbusmq_subscribe client program: turn on/off support for mqtt and link with libmosquitto
+# modbusmq_bridge client program: turn on/off support for mqtt and link with libmosquitto
 option(MQTT_ENABLED "Enable MQTT/Mosquitto support" OFF)
 
 # Set preprocessor definition accordingly

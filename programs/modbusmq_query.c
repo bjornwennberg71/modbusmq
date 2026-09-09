@@ -73,7 +73,7 @@ print_help(int argc, char **argv, int print_long)
         printf("                        int_ab/uint_ab/int_abcd/float_abcd and so on.\n");
         printf("--mod n               : scaling, same convention as a config channel.\n");
         printf("--mul n                 The value given to --write is in engineering units\n");
-        printf("--add n                 and these undo the scaling, exactly as modbusmq_subscribe does.\n");
+        printf("--add n                 and these undo the scaling, exactly as modbusmq_bridge does.\n");
         printf("--dry-run            : show the frame that would be sent, and send nothing.\n");
         printf("\n");
         printf("write examples:\n");
@@ -362,7 +362,7 @@ main(int argc, char **argv)
     // Write path.
     //
     // The value is scaled by the same modbusmq_write_encode() that
-    // modbusmq_subscribe uses, so checking a setpoint here checks the code
+    // modbusmq_bridge uses, so checking a setpoint here checks the code
     // that will carry it in production rather than something that resembles it.
     //
     if (GI.is_write)

@@ -3,16 +3,19 @@
 </p>
 
 # modbusmq
-High-performance Modbus client library and MQTT integration toolkit.
+A config-driven MQTT bridge for Modbus devices, and the C library underneath it.
 
-`modbusmq` is a lightweight, event-driven Modbus TCP/RTU client library accompanied by a set of practical tools for industrial energy systems, monitoring solutions, and embedded gateways.
+`modbusmq` puts an MQTT front end on any Modbus device. Registers and coils become
+topics you can subscribe to; values published to a topic become writes back to the
+device. The register map, the scaling and the topic names all live in a plain
+`.config` file, so a new meter, battery or inverter is a file to write, not code.
 
 It provides:
 
-- **libmodbusmq** — a modular and efficient C library for Modbus communications  
-- **A subscription engine** for periodic polling defined using `.config` files  
-- **Standalone programs** for querying devices, running subscription pipelines, or hosting a virtual Modbus server  
-- **Device configuration examples** for Accuvim II, Polarium, and Shoto battery systems
+- **modbusmq_bridge** — a bidirectional MQTT ↔ Modbus bridge: polls registers and coils onto topics, and writes values arriving on topics back to the device
+- **libmodbusmq** — the single-threaded, event-driven Modbus TCP/RTU library it is built on, useful on its own
+- **Standalone tools** for one-shot queries and for emulating a Modbus device
+- **Device configuration examples** for Accuvim II, Polarium, Murata and Shoto systems
 
 The project is designed to be simple to integrate, portable, and suitable for both embedded and server-side applications.
 
@@ -36,10 +39,16 @@ These requirements led to the design of a **single-threaded, event-driven state 
 As the design evolved, it became clear that the scheduler and Modbus abstraction formed a reusable component—now the core **libmodbusmq** library. On top of this library, a set of standalone tools was built:
 
 - `modbusmq_query` — simple direct Modbus operations  
-- `modbusmq_subscribe` — subscription-based reading using `.config` files  
+- `modbusmq_bridge` — the MQTT bridge, reading and writing from `.config` files  
 - `modbusmq_server` — a virtual Modbus device serving configurable default values  
 - I have several other programs I might add to the system in the near future time permitting.
 The result is a lightweight, extensible system that can communicate with multiple devices, over multiple adapters, without multithreading, while remaining easy to deploy, configure, and maintain.
+
+What was not planned is where `modbusmq_bridge` ended up. It started as a poller
+that happened to publish what it read. Once `write.N` entries arrived it could go the
+other way too, and at that point it stopped being a polling tool and became the whole
+translation layer: a generic MQTT front end for any Modbus device, driven entirely by
+configuration. That is now the main way the project gets used.
 
 ---
 
@@ -55,12 +64,12 @@ The result is a lightweight, extensible system that can communicate with multipl
 - Connect string for TCP and RTU
 
 ### Tools
-- **modbusmq_subscribe** — reads `.config` files, polls devices, optionally publishes to MQTT  
-- **modbusmq_query** — one-shot tool for direct Modbus queries  
+- **modbusmq_bridge** — the MQTT ↔ Modbus bridge: scheduled reads out to topics, topic writes back to registers and coils  
+- **modbusmq_query** — one-shot tool for direct Modbus reads and writes  
 - **modbusmq_server** — virtual Modbus device emulator returning `.config` default values  
 
 ### Configuration
-**[SUBSCRIBE.md](SUBSCRIBE.md) — how to set up `modbusmq_subscribe` and write its config file.**
+**[SUBSCRIBE.md](SUBSCRIBE.md) — how to set up `modbusmq_bridge` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
 `.config` files describe:
@@ -83,11 +92,11 @@ Example configs included:
 ```
 modbusmq/
 ├── lib/ # Core C library
-├── programs/modbusmq_subscribe.c # Subscription-driven polling tool
+├── programs/modbusmq_bridge.c # MQTT <-> Modbus bridge service
 ├── programs/modbusmq_query.c # One-shot query tool
 ├── programs/modbusmq_server.c # Virtual Modbus device emulator
 ├── config/*.config # Device configuration examples
-├── SUBSCRIBE.md # Setting up modbusmq_subscribe
+├── SUBSCRIBE.md # Setting up modbusmq_bridge
 ├── config/CONFIG.md # Config file key reference
 
 ```
@@ -124,7 +133,7 @@ Install (into `debug/modbusmq/` or `release/modbusmq/`):
 Build output includes:
 ```
 lib/libmodbusmq.so
-programs/modbusmq_subscribe
+programs/modbusmq_bridge
 programs/modbusmq_query
 programs/modbusmq_server
 config/*.config
@@ -132,20 +141,50 @@ config/*.config
 
 
 # Programs
-## modbusmq_subscribe
+## modbusmq_bridge
 
-Continuous Modbus polling with .config files, and writing back to registers and
-coils from MQTT.
+The service. It sits between one Modbus bus and one MQTT broker and translates in
+both directions, driven entirely by a `.config` file.
+
+```
+                       ┌────────────────────┐
+   published topics ◄───┤                    ├───► reads:  functions 01/02/03/04
+                       │   modbusmq_bridge  │
+   command topics ────►┤                    ├───► writes: functions 05/06/16
+                       └────────────────────┘
+      MQTT broker         my_device.config        Modbus TCP host, or an
+                                                  RS-485 line and its slaves
+```
+
+**Outbound.** Each `input.N` block is one Modbus read repeated on its own interval —
+input registers, holding registers, coils or discrete inputs. Each channel under it
+picks a value out of the response, applies byte order and scaling to get engineering
+units, and publishes it to its topic. Publishing can be throttled per channel:
+on-change only, a deadband, a minimum interval, a heartbeat.
+
+**Inbound.** Each `write.N` block subscribes to a topic. A value arriving there is
+scaled back into raw register form with the same encoder the read path uses in
+reverse, then written to the device — single coil (05), single register (06) or a
+register pair (16). Writes carry their own slave and address, because the register
+you set a value in is rarely the one you read it back from. They are fire and
+forget: failures are logged and reported through the error callback, nothing retries.
+
+**Scope of one process.** One config, one bus, one broker, and as many slaves on
+that bus as it has. Several buses means several processes with a config each. There
+are no threads — reads, writes and timers all run through one cooperative state
+machine, so timing is predictable and there is nothing to race.
+
+It reconnects on both sides on its own, and because a broker forgets subscriptions
+across a reconnect, it re-subscribes every write topic when the MQTT link comes back.
+
+Supporting a new meter, battery or inverter is a `.config` file. No C.
 
 **Setting one up: [SUBSCRIBE.md](SUBSCRIBE.md).**
 
-Examples:
 ```
-./modbusmq_subscribe -c accuvim_ii.config
-./modbusmq_subscribe -c polarium.config
+./modbusmq_bridge -c accuvim_ii.config
+./modbusmq_bridge -c polarium.config
 ```
-
-Used for production data acquisition and optional MQTT output.
 
 ## modbusmq_query
 
@@ -167,7 +206,7 @@ verbose
 
 It also writes. `--write` takes the value in engineering units and `--mod`/`--mul`/`--add`
 undo the scaling exactly as a config channel would, using the same encoder
-`modbusmq_subscribe` uses — so what you check here is what production will send.
+`modbusmq_bridge` uses — so what you check here is what production will send.
 
 ```
 # 25.5 degC into a signed register holding tenths of a degree
@@ -197,13 +236,13 @@ Virtual Modbus device emulator.
 
 Reads a *.config file and exposes a Modbus TCP/RTU endpoint that always returns the configured default values.
 
-Future idea: have modbusmq_server subscribe to an MQTT feed (or watch a file) and serve back live/updating values instead of static config defaults — useful for testing modbusmq_subscribe against a scenario that changes over time instead of a fixed snapshot.
+Future idea: have modbusmq_server subscribe to an MQTT feed (or watch a file) and serve back live/updating values instead of static config defaults — useful for testing modbusmq_bridge against a scenario that changes over time instead of a fixed snapshot.
 
 Example:
 ```
 ./modbusmq_server -c shoto.config &
 # Use -v if you want to know some details about the request/response
-./modbusmq_subscribe -c ../config/shoto.config -v
+./modbusmq_bridge -c ../config/shoto.config -v
 ```
 
 Sample `-v` output (one battery module shown, trimmed):
@@ -218,7 +257,7 @@ info: battery/module/1/soh=1.00
 ...and so on for each configured channel, repeated per battery module.
 ```
 
-You can point any Modbus client or modbusmq_subscribe at this virtual server to test data flows.
+You can point any Modbus client or modbusmq_bridge at this virtual server to test data flows.
 
 # Contributing
 

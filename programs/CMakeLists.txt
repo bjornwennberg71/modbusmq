@@ -10,10 +10,10 @@ project(programs)
 include_directories(../lib)
 
 #
-# modbusmq_subscribe
+# modbusmq_bridge
 #
-add_executable(modbusmq_subscribe modbusmq_subscribe.c)
-target_link_libraries(modbusmq_subscribe modbusmq mosquitto)
+add_executable(modbusmq_bridge modbusmq_bridge.c)
+target_link_libraries(modbusmq_bridge modbusmq mosquitto)
 
 
 #
@@ -28,7 +28,7 @@ target_link_libraries(modbusmq_query modbusmq)
 add_executable(modbusmq_server modbusmq_server.c)
 target_link_libraries(modbusmq_server modbusmq)
 
-install(TARGETS modbusmq_query modbusmq_subscribe modbusmq_server
+install(TARGETS modbusmq_query modbusmq_bridge modbusmq_server
         RUNTIME DESTINATION bin)
 	
 

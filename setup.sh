@@ -4,7 +4,7 @@
 #
 # usage: setup.sh [--enable-mqtt]
 #
-#   --enable-mqtt   build modbusmq_subscribe against libmosquitto, so it
+#   --enable-mqtt   build modbusmq_bridge against libmosquitto, so it
 #                   publishes to the broker instead of only polling
 #
 MQTT=OFF

@@ -1,7 +1,7 @@
 # modbusmq Configuration Guide
 
 Reference for every config key. For a walkthrough of setting up
-`modbusmq_subscribe` — finding the device, building the config, checking it
+`modbusmq_bridge` — finding the device, building the config, checking it
 without hardware — see [SUBSCRIBE.md](../SUBSCRIBE.md).
 
 Config files use a simple `key = value` format. `#` starts a comment — everything after it on the line is ignored. Whitespace around keys and values is stripped automatically.
@@ -386,7 +386,7 @@ fresh subscriber can be left looking at a channel that appears dead.
 
 ## Writes (MQTT to Modbus)
 
-A **write** is the mirror image of an input: instead of polling a register and publishing the result, `modbusmq_subscribe` subscribes to an MQTT topic and writes whatever arrives to a register or coil.
+A **write** is the mirror image of an input: instead of polling a register and publishing the result, `modbusmq_bridge` subscribes to an MQTT topic and writes whatever arrives to a register or coil.
 
 `write.max` must appear **before** any `write.N.*` keys, the same way `input.max` does.
 

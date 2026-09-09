@@ -224,7 +224,7 @@ extern int   modbusmq_channel_in_range(struct modbusmq_context_t *context, modbu
 
 //
 // Format an already-scaled channel value for output/publish, deciding the
-// decimal count the same way for modbusmq_subscribe and anything else that
+// decimal count the same way for modbusmq_bridge and anything else that
 // prints a channel: an explicit channel.decimals wins, otherwise a bit
 // channel gets 0, a float format gets 3, and an integer format follows its
 // mod divisor (mod=-100 -> 2 decimals, and so on) — see modbusmq.c for the

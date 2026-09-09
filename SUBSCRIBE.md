@@ -1,8 +1,9 @@
-# Setting up modbusmq_subscribe
+# Setting up modbusmq_bridge
 
-`modbusmq_subscribe` polls one or more Modbus devices on a schedule and publishes
-what it reads to MQTT. With a `write.N` section it also goes the other way:
-subscribe to a topic, write the value to a register or coil.
+`modbusmq_bridge` is an MQTT front end for a Modbus device. Outbound, it polls
+registers and coils on a schedule and publishes what it reads. Inbound, a `write.N`
+section subscribes to a topic and writes whatever arrives to a register or coil.
+Both directions are configuration, not code.
 
 This is the walkthrough. [config/CONFIG.md](config/CONFIG.md) is the reference for
 every key.
@@ -11,7 +12,7 @@ every key.
 
 ## 1. Build with MQTT
 
-MQTT is off by default, and without it `modbusmq_subscribe` polls but publishes
+MQTT is off by default, and without it `modbusmq_bridge` polls but publishes
 nothing:
 
 ```bash
@@ -69,7 +70,7 @@ mqtt.connect = mqtt://localhost:1883
 Run it:
 
 ```bash
-./modbusmq_subscribe -c my_device.config -v
+./modbusmq_bridge -c my_device.config -v
 ```
 
 **Set `config.version = 2.0` on anything new.** Below that, `int_ab` keeps an old
@@ -149,7 +150,7 @@ config can be verified before going near hardware:
 ```bash
 # point a copy of the config at tcp://localhost:1502, give channels a value =
 ./modbusmq_server -c my_device.config &
-./modbusmq_subscribe -c my_device.config -v
+./modbusmq_bridge -c my_device.config -v
 ```
 
 This confirms offsets, formats and scaling. It cannot confirm the register

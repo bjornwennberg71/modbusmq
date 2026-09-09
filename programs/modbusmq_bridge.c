@@ -2,7 +2,7 @@
 // 
 // bjornwennberg71@gmail.com
 // 
-// modbusmq_subscribe.c
+// modbusmq_bridge.c
 // 
 
 // INCLUDES //////////////////////////////////////////////////////////////////
@@ -527,7 +527,7 @@ parse_argv(int argc, char **argv)
         }
         else if (strstr(argv[a], "--v")) // --version
         {
-            printf("modbusmq_subscribe version: %s\n", version);
+            printf("modbusmq_bridge version: %s\n", version);
             return 1;
         }
         else if (strcmp(argv[a], "-c") == 0 ||
