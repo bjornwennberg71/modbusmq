@@ -3,6 +3,9 @@
 </p>
 
 # modbusmq
+
+[![CI](https://github.com/bjornwennberg71/modbusmq/actions/workflows/ci.yml/badge.svg)](https://github.com/bjornwennberg71/modbusmq/actions/workflows/ci.yml)
+
 A config-driven MQTT bridge for Modbus devices, and the C library underneath it.
 
 `modbusmq` puts an MQTT front end on any Modbus device. Registers and coils become

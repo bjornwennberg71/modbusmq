@@ -1,0 +1,167 @@
+#
+# modbusmq CI
+#
+# GitHub's equivalent of .gitlab-ci.yml. The differences worth knowing:
+#
+#   .gitlab-ci.yml          -> .github/workflows/*.yml  (several files allowed,
+#                              each independent, each with its own triggers)
+#   stages: + stage:        -> jobs: + needs:           (no stages; a job runs
+#                              immediately unless it needs another)
+#   image:                  -> runs-on:                 (a whole VM, not a
+#                              container, unless you add container:)
+#   script:                 -> steps: with run:
+#   artifacts: paths:       -> a step using actions/upload-artifact
+#   parallel: matrix:       -> strategy: matrix:        (works the same way)
+#   only:/rules:            -> on:
+#
+# Jobs run in parallel by default. Runners are free for public repositories.
+#
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:        # adds a "Run workflow" button in the Actions tab
+
+jobs:
+  #
+  # Build and test both MQTT configurations. MQTT_ENABLED is a whole-tree
+  # compile flag, so these are genuinely different builds: libmodbusmq never
+  # references mosquitto and must pass either way, and modbusmq needs it on for
+  # the publish path to be compiled at all.
+  #
+  # This is what test/run_matrix.sh does locally. Here it is a real matrix so a
+  # failure says which configuration broke without reading a log.
+  #
+  test:
+    name: test (MQTT ${{ matrix.mqtt }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false      # let both report; one failing must not hide the other
+      matrix:
+        mqtt: [ "OFF", "ON" ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libmosquitto
+        if: matrix.mqtt == 'ON'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmosquitto-dev
+
+      - name: Configure
+        run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Debug -DMQTT_ENABLED=${{ matrix.mqtt }}
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build build 2>&1 | tee build.log
+
+      #
+      # A Debug build compiles with -Wall -Wextra and the tree is clean, so a
+      # warning is a regression and fails the job rather than scrolling past.
+      #
+      - name: No compiler warnings
+        run: |
+          if grep -q "warning:" build.log; then
+            grep "warning:" build.log | sort -u
+            echo "::error::build produced compiler warnings"
+            exit 1
+          fi
+          echo "no warnings"
+
+      - name: Test
+        run: bash test/run_tests.sh "$PWD/build"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        if: always()          # keep the log when the build or tests failed
+        with:
+          name: modbusmq-mqtt-${{ matrix.mqtt }}
+          path: |
+            build/programs/modbusmq
+            build/programs/modbusmq_query
+            build/programs/modbusmq_server
+            build/lib/libmodbusmq.so*
+            build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  #
+  # Install the library and build a throwaway consumer against it, both ways a
+  # downstream would. A broken .pc file or export set fails only at someone
+  # else's build, never in ours, so it has to be exercised deliberately.
+  #
+  packaging:
+    name: packaging (find_package and pkg-config)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and install
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DMQTT_ENABLED=OFF \
+                -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+          cmake --build build
+          cmake --install build
+          find prefix -name '*.pc' -o -name '*.cmake' | sort
+
+      - name: Consumer via find_package
+        run: |
+          mkdir -p consumer && cd consumer
+          cat > main.c <<'EOF'
+          #include "modbusmq.h"
+          #include <stdio.h>
+          int main(void)
+          {
+              printf("%s %s\n", MODBUSMQ_VERSION_STRING,
+                     modbusmq_strerror(MODBUSMQ_ERR_PROTOCOL));
+              return 0;
+          }
+          EOF
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(consumer C)
+          find_package(modbusmq 2.3 REQUIRED)
+          add_executable(consumer main.c)
+          target_link_libraries(consumer modbusmq::modbusmq)
+          EOF
+          cmake -B b -S . -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/prefix"
+          cmake --build b
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/prefix/lib" ./b/consumer
+
+      - name: Consumer via pkg-config
+        run: |
+          cd consumer
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/prefix/lib/pkgconfig"
+          pkg-config --modversion modbusmq
+          cc main.c $(pkg-config --cflags --libs modbusmq) -o pc_consumer
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/prefix/lib" ./pc_consumer
+
+  #
+  # The version lives in two files that are kept in sync by hand, so check it
+  # rather than trusting the hand.
+  #
+  version:
+    name: version consistency
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Header and CMakeLists agree
+        run: |
+          H=$(grep -E "MODBUSMQ_VERSION_(MAJOR|MINOR|BUILD)" lib/modbusmq.h \
+                | grep -oE "[0-9]+$" | paste -sd.)
+          C=$(grep -oE 'VERSION [0-9]+\.[0-9]+\.[0-9]+' lib/CMakeLists.txt \
+                | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "lib/modbusmq.h     : $H"
+          echo "lib/CMakeLists.txt : $C"
+          if [ "$H" != "$C" ]; then
+            echo "::error::version mismatch between lib/modbusmq.h and lib/CMakeLists.txt"
+            exit 1
+          fi
