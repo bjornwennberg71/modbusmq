@@ -74,7 +74,8 @@ Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key
 
 ### Tests
 ```bash
-(cd debug && make check)     # or: bash test/run_tests.sh release
+(cd debug && make check)      # this tree
+(cd debug && make check-all)  # both MQTT_ENABLED configurations
 ```
 Boots a `modbusmq_server` on `test/test.config` and runs the suite against it —
 decoders, scaling, the publish policy, all four register and bit types end to

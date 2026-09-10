@@ -22,6 +22,15 @@ endforeach()
 #
 # make check -- builds what it needs, then runs the suite against this tree
 #
+#
+# make check-all -- both MQTT configurations, in throwaway build dirs, so this
+# tree's own MQTT setting is left alone
+#
+add_custom_target(check-all
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_matrix.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL)
+
 add_custom_target(check
     COMMAND ${CMAKE_COMMAND} -E echo ""
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.sh ${CMAKE_BINARY_DIR}
