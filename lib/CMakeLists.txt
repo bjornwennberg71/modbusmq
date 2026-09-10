@@ -5,9 +5,9 @@
 #
 #
 set(T modbusmq)
-project(${T} VERSION 2.2.1 DESCRIPTION "modbusmq library")
+project(${T} VERSION 2.3.0 DESCRIPTION "modbusmq library")
 
-set(SOURCES modbusmq_tcp.c modbusmq_rtu.c modbusmq.c modbusmq_time.c modbusmq_log.c modbusmq_config.c)
+set(SOURCES modbusmq_tcp.c modbusmq_rtu.c libmodbusmq.c modbusmq_time.c modbusmq_log.c modbusmq_config.c)
 
 add_library(${T} SHARED ${SOURCES} )
 

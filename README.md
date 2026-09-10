@@ -12,7 +12,7 @@ device. The register map, the scaling and the topic names all live in a plain
 
 It provides:
 
-- **modbusmq_bridge** — a bidirectional MQTT ↔ Modbus bridge: polls registers and coils onto topics, and writes values arriving on topics back to the device
+- **modbusmq** — a bidirectional MQTT ↔ Modbus bridge: polls registers and coils onto topics, and writes values arriving on topics back to the device
 - **libmodbusmq** — the single-threaded, event-driven Modbus TCP/RTU library it is built on, useful on its own
 - **Standalone tools** for one-shot queries and for emulating a Modbus device
 - **Device configuration examples** for Accuvim II, Polarium, Murata and Shoto systems
@@ -39,12 +39,12 @@ These requirements led to the design of a **single-threaded, event-driven state 
 As the design evolved, it became clear that the scheduler and Modbus abstraction formed a reusable component—now the core **libmodbusmq** library. On top of this library, a set of standalone tools was built:
 
 - `modbusmq_query` — simple direct Modbus operations  
-- `modbusmq_bridge` — the MQTT bridge, reading and writing from `.config` files  
+- `modbusmq` — the MQTT bridge, reading and writing from `.config` files  
 - `modbusmq_server` — a virtual Modbus device serving configurable default values  
 - I have several other programs I might add to the system in the near future time permitting.
 The result is a lightweight, extensible system that can communicate with multiple devices, over multiple adapters, without multithreading, while remaining easy to deploy, configure, and maintain.
 
-What was not planned is where `modbusmq_bridge` ended up. It started as a poller
+What was not planned is where `modbusmq` ended up. It started as a poller
 that happened to publish what it read. Once `write.N` entries arrived it could go the
 other way too, and at that point it stopped being a polling tool and became the whole
 translation layer: a generic MQTT front end for any Modbus device, driven entirely by
@@ -64,12 +64,12 @@ configuration. That is now the main way the project gets used.
 - Connect string for TCP and RTU
 
 ### Tools
-- **modbusmq_bridge** — the MQTT ↔ Modbus bridge: scheduled reads out to topics, topic writes back to registers and coils  
+- **modbusmq** — the MQTT ↔ Modbus bridge: scheduled reads out to topics, topic writes back to registers and coils  
 - **modbusmq_query** — one-shot tool for direct Modbus reads and writes  
 - **modbusmq_server** — virtual Modbus device emulator returning `.config` default values  
 
 ### Configuration
-**[BRIDGE.md](BRIDGE.md) — how to set up `modbusmq_bridge` and write its config file.**
+**[BRIDGE.md](BRIDGE.md) — how to set up `modbusmq` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
 `.config` files describe:
@@ -92,11 +92,11 @@ Example configs included:
 ```
 modbusmq/
 ├── lib/ # Core C library
-├── programs/modbusmq_bridge.c # MQTT <-> Modbus bridge service
+├── programs/modbusmq.c # MQTT <-> Modbus bridge service
 ├── programs/modbusmq_query.c # One-shot query tool
 ├── programs/modbusmq_server.c # Virtual Modbus device emulator
 ├── config/*.config # Device configuration examples
-├── BRIDGE.md    # Setting up modbusmq_bridge
+├── BRIDGE.md    # Setting up modbusmq
 ├── config/CONFIG.md # Config file key reference
 
 ```
@@ -133,7 +133,7 @@ Install (into `debug/modbusmq/` or `release/modbusmq/`):
 Build output includes:
 ```
 lib/libmodbusmq.so
-programs/modbusmq_bridge
+programs/modbusmq
 programs/modbusmq_query
 programs/modbusmq_server
 config/*.config
@@ -141,7 +141,7 @@ config/*.config
 
 
 # Programs
-## modbusmq_bridge
+## modbusmq
 
 The service. It sits between one Modbus bus and one MQTT broker and translates in
 both directions, driven entirely by a `.config` file.
@@ -149,7 +149,7 @@ both directions, driven entirely by a `.config` file.
 ```
                        ┌────────────────────┐
    published topics ◄───┤                    ├───► reads:  functions 01/02/03/04
-                       │   modbusmq_bridge  │
+                       │      modbusmq      │
    command topics ────►┤                    ├───► writes: functions 05/06/16
                        └────────────────────┘
       MQTT broker         my_device.config        Modbus TCP host, or an
@@ -182,8 +182,8 @@ Supporting a new meter, battery or inverter is a `.config` file. No C.
 **Setting one up: [BRIDGE.md](BRIDGE.md).**
 
 ```
-./modbusmq_bridge -c accuvim_ii.config
-./modbusmq_bridge -c polarium.config
+./modbusmq -c accuvim_ii.config
+./modbusmq -c polarium.config
 ```
 
 ## modbusmq_query
@@ -206,7 +206,7 @@ verbose
 
 It also writes. `--write` takes the value in engineering units and `--mod`/`--mul`/`--add`
 undo the scaling exactly as a config channel would, using the same encoder
-`modbusmq_bridge` uses — so what you check here is what production will send.
+`modbusmq` uses — so what you check here is what production will send.
 
 ```
 # 25.5 degC into a signed register holding tenths of a degree
@@ -236,13 +236,13 @@ Virtual Modbus device emulator.
 
 Reads a *.config file and exposes a Modbus TCP/RTU endpoint that always returns the configured default values.
 
-Future idea: have modbusmq_server subscribe to an MQTT feed (or watch a file) and serve back live/updating values instead of static config defaults — useful for testing modbusmq_bridge against a scenario that changes over time instead of a fixed snapshot.
+Future idea: have modbusmq_server subscribe to an MQTT feed (or watch a file) and serve back live/updating values instead of static config defaults — useful for testing modbusmq against a scenario that changes over time instead of a fixed snapshot.
 
 Example:
 ```
 ./modbusmq_server -c shoto.config &
 # Use -v if you want to know some details about the request/response
-./modbusmq_bridge -c ../config/shoto.config -v
+./modbusmq -c ../config/shoto.config -v
 ```
 
 Sample `-v` output (one battery module shown, trimmed):
@@ -257,7 +257,7 @@ info: battery/module/1/soh=1.00
 ...and so on for each configured channel, repeated per battery module.
 ```
 
-You can point any Modbus client or modbusmq_bridge at this virtual server to test data flows.
+You can point any Modbus client or modbusmq at this virtual server to test data flows.
 
 # Contributing
 

@@ -10,10 +10,15 @@ project(programs)
 include_directories(../lib)
 
 #
-# modbusmq_bridge
+# modbusmq
 #
-add_executable(modbusmq_bridge modbusmq_bridge.c)
-target_link_libraries(modbusmq_bridge modbusmq mosquitto)
+# The CMake target name cannot be "modbusmq" -- lib/ already owns that target
+# for the shared library -- so the target is modbusmq_prog and OUTPUT_NAME
+# gives the installed binary its real name.
+#
+add_executable(modbusmq_prog modbusmq.c)
+set_target_properties(modbusmq_prog PROPERTIES OUTPUT_NAME modbusmq)
+target_link_libraries(modbusmq_prog modbusmq mosquitto)
 
 
 #
@@ -28,7 +33,5 @@ target_link_libraries(modbusmq_query modbusmq)
 add_executable(modbusmq_server modbusmq_server.c)
 target_link_libraries(modbusmq_server modbusmq)
 
-install(TARGETS modbusmq_query modbusmq_bridge modbusmq_server
+install(TARGETS modbusmq_query modbusmq_prog modbusmq_server
         RUNTIME DESTINATION bin)
-	
-
