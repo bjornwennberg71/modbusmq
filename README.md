@@ -72,6 +72,15 @@ configuration. That is now the main way the project gets used.
 **[MODBUSMQ.md](MODBUSMQ.md) — how to set up `modbusmq` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
+### Tests
+```bash
+(cd debug && make check)     # or: bash test/run_tests.sh release
+```
+Boots a `modbusmq_server` on `test/test.config` and runs the suite against it —
+decoders, scaling, the publish policy, all four register and bit types end to
+end, the event loop and subscriptions, and the command line tools. See
+[test/README.md](test/README.md).
+
 ### Building on the library
 **[LIBMODBUSMQ.md](LIBMODBUSMQ.md) — the C API: contexts, requests, the event loop,
 subscriptions and error handling.**

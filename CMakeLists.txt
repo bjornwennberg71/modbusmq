@@ -21,4 +21,5 @@ endif()
 add_subdirectory(lib)
 add_subdirectory(programs)
 add_subdirectory(config)
+add_subdirectory(test)
 
