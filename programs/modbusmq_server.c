@@ -50,12 +50,18 @@ modbusmq_connection_t modbusmq_connections[MODBUSMQ_CONNECTION_MAX];
 // 
 // 
 
+#define MAX_CONFIG_OVERRIDES 64
+
 typedef struct GlobalInfo
 {
     const char *config_filename;
     int         verbose;
     int         sd;
     int         has_mqtt;
+
+    // -e key=value entries, pointing straight into argv
+    char       *overrides[MAX_CONFIG_OVERRIDES];
+    int         noverrides;
 } GlobalInfo;
 
 
@@ -72,7 +78,7 @@ static const char *program_version = MODBUSMQ_VERSION_STRING;
 void
 print_usage(int long_usage)
 {
-    printf("Usage: %s -c filename\n", program_name);
+    printf("Usage: %s -c filename [-e key=value ...] [-v]\n", program_name);
     
     if (!long_usage)
     {
@@ -80,6 +86,9 @@ print_usage(int long_usage)
     }
 
     printf("-c filename  : Reads config from file\n");
+    printf("-e key=value : Override a config key, repeatable\n");
+    printf("               e.g. -e modbusmq.connect=tcp://localhost:1502\n");
+    printf("-v           : increase verbosity\n");
     printf("-h|--help : prints this help-text\n");
 }
 
@@ -108,7 +117,29 @@ parse_argv(int argc, char **argv)
 {
     for(int a = 1; a < argc; ++a)
     {
-        if (strstr(argv[a], "--ver")) // --version
+        // exact match: the tests below are substring matches
+        if (strcmp(argv[a], "-e") == 0) // -e key=value
+        {
+            a++;
+            if (a >= argc)
+            {
+                fprintf(stderr, "-e requires key=value\n");
+                print_usage(0);
+                return -1;
+            }
+            if (!strchr(argv[a], '=') || argv[a][0] == '=')
+            {
+                fprintf(stderr, "-e %s: expected key=value\n", argv[a]);
+                return -1;
+            }
+            if (GI.noverrides >= MAX_CONFIG_OVERRIDES)
+            {
+                fprintf(stderr, "-e: too many overrides (max %d)\n", MAX_CONFIG_OVERRIDES);
+                return -1;
+            }
+            GI.overrides[GI.noverrides++] = argv[a];
+        }
+        else if (strstr(argv[a], "--ver")) // --version
         {
             print_version();
             return 1;
@@ -804,12 +835,17 @@ main(int argc, char **argv)
     
     if (GI.config_filename)
     {
+        modbusmq_config_set_overrides(GI.overrides, GI.noverrides);
+
         rc = modbusmq_config_parse(GI.config_filename);
         if (rc != 0)
         {
             fprintf(stderr, "Error reading config-file: %s\n", GI.config_filename);
             return -1;
         }
+
+        // warn only, never fatal
+        modbusmq_config_override_unmatched();
     }
 
 

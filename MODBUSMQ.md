@@ -149,9 +149,13 @@ config can be verified before going near hardware:
 
 ```bash
 # give the channels a value =, then point both at the virtual server with -e
-./modbusmq_server -c my_device.config &
-./modbusmq -c my_device.config -e modbusmq.connect=tcp://localhost:1502 -v
+./modbusmq_server -c my_device.config -e modbusmq.connect=tcp://localhost:1502 &
+./modbusmq        -c my_device.config -e modbusmq.connect=tcp://localhost:1502 -v
 ```
+
+`modbusmq_server` takes `-e` too, which is what makes this work for an RTU
+config: both sides are pointed at TCP for the test and the file keeps its real
+`rtu://` connect string.
 
 This confirms offsets, formats and scaling. It cannot confirm the register
 addresses are the ones the real device uses.

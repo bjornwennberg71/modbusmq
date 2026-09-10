@@ -189,7 +189,7 @@ Supporting a new meter, battery or inverter is a `.config` file. No C.
 ### Overriding config keys with -e
 
 `-e key=value` replaces one config key for a single run, using the same key names
-the file uses. Repeatable. The substitution happens as the file is read, so the
+the file uses. Repeatable, and accepted by `modbusmq_server` as well. The substitution happens as the file is read, so the
 override lands at the point the key appears rather than after the parse.
 
 ```
@@ -258,9 +258,10 @@ Future idea: have modbusmq_server subscribe to an MQTT feed (or watch a file) an
 
 Example:
 ```
-./modbusmq_server -c shoto.config &
+# shoto.config is an rtu config; -e serves and reads it over tcp instead,
+# without editing or copying the file. Both programs take -e.
+./modbusmq_server -c shoto.config -e modbusmq.connect=tcp://localhost:1502 &
 # Use -v if you want to know some details about the request/response
-# -e points the config at the virtual server without editing or copying it
 ./modbusmq -c ../config/shoto.config -e modbusmq.connect=tcp://localhost:1502 -v
 ```
 
