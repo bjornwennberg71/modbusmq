@@ -69,7 +69,7 @@ configuration. That is now the main way the project gets used.
 - **modbusmq_server** — virtual Modbus device emulator returning `.config` default values  
 
 ### Configuration
-**[SUBSCRIBE.md](SUBSCRIBE.md) — how to set up `modbusmq_bridge` and write its config file.**
+**[BRIDGE.md](BRIDGE.md) — how to set up `modbusmq_bridge` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
 `.config` files describe:
@@ -96,7 +96,7 @@ modbusmq/
 ├── programs/modbusmq_query.c # One-shot query tool
 ├── programs/modbusmq_server.c # Virtual Modbus device emulator
 ├── config/*.config # Device configuration examples
-├── SUBSCRIBE.md # Setting up modbusmq_bridge
+├── BRIDGE.md    # Setting up modbusmq_bridge
 ├── config/CONFIG.md # Config file key reference
 
 ```
@@ -179,7 +179,7 @@ across a reconnect, it re-subscribes every write topic when the MQTT link comes 
 
 Supporting a new meter, battery or inverter is a `.config` file. No C.
 
-**Setting one up: [SUBSCRIBE.md](SUBSCRIBE.md).**
+**Setting one up: [BRIDGE.md](BRIDGE.md).**
 
 ```
 ./modbusmq_bridge -c accuvim_ii.config

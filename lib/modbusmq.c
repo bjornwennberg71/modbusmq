@@ -2193,7 +2193,7 @@ modbusmq_frame_write_mask_registers( struct modbusmq_context_t *context, modbusm
 
 
 #define MODBUSMQ_MSG_POST      1
-#define MODBUSMQ_MSG_SUBSRIBE  2
+#define MODBUSMQ_MSG_SUBSCRIBE  2
 
 /**
  * 
@@ -3080,7 +3080,7 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
             context->message_cb(context, &wrapper->msg);
         }
     }
-    else if (wrapper->flags == MODBUSMQ_MSG_SUBSRIBE && context->subscribe_cb)
+    else if (wrapper->flags == MODBUSMQ_MSG_SUBSCRIBE && context->subscribe_cb)
     {
         modbusmq_config_t
             *modbusmq_config = modbusmq_config_get();
@@ -3195,7 +3195,7 @@ modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sle
                     //
                     // post a request
                     //
-                    modbusmq_post_internal(context, &elem->msg, MODBUSMQ_MSG_SUBSRIBE);
+                    modbusmq_post_internal(context, &elem->msg, MODBUSMQ_MSG_SUBSCRIBE);
 
 
                     elem->timer_next_time += elem->timer_interval;

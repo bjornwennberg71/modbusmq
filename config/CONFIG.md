@@ -2,7 +2,7 @@
 
 Reference for every config key. For a walkthrough of setting up
 `modbusmq_bridge` — finding the device, building the config, checking it
-without hardware — see [SUBSCRIBE.md](../SUBSCRIBE.md).
+without hardware — see [BRIDGE.md](../BRIDGE.md).
 
 Config files use a simple `key = value` format. `#` starts a comment — everything after it on the line is ignored. Whitespace around keys and values is stripped automatically.
 
