@@ -121,7 +121,12 @@ extern int  modbusmq_tcp_flush( struct modbusmq_context_t *context);
     // run-handler (for use in production)
 extern int  modbusmq_loop_write_read(struct modbusmq_context_t *context, int revents);
     // fills in correct descriptors to be used in select. returns recommended sleep time and filedescriptor,
-    // or -1 when there is no connection
+    // or -1 when there is no connection.
+    //
+    // sleep_time is in/out: pass your own ceiling in milliseconds and it comes
+    // back lowered to whenever the next subscription is due, or unchanged if
+    // none is due sooner. Pass 0 for no ceiling of your own and get the 1000 ms
+    // default.
 extern int modbusmq_loop_prepare(    struct modbusmq_context_t *context, millitime_t *sleep_time, int16_t *poll_events);
 
     // callbacks
@@ -144,6 +149,12 @@ extern void modbusmq_set_error_callback(struct modbusmq_context_t *context, void
 extern void modbusmq_set_debug(int nlevel);
 extern int  modbusmq_get_debug(void);
 
+//
+// Describes either a MODBUSMQ_ERR_* code or an errno — the library's codes are
+// negative and an errno is not, so one function covers both without ambiguity.
+// Modbus exception codes from a device are a separate namespace and are not
+// handled here; read those with modbusmq_frame_error_code().
+//
 extern const char *modbusmq_strerror(int nerrno);
 
     // modbusmq messages

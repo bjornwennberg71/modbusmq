@@ -488,16 +488,33 @@ modbusmq_reset_queue(modbusmq_context_t *context)
  * 
  * @brief maps errno into string
  *
- * Simply calls strerror(nerrno).
- * TODO: Add own errors to the string which are unique to libmodbusmq
+ * Takes either one of the library's own MODBUSMQ_ERR_* codes or an errno, and
+ * describes it. The two cannot collide: the library's codes are negative and an
+ * errno is not, so the sign picks the namespace.
  *
- * @param nerrno: errno
+ * Modbus exception codes from a device are a third, separate namespace — they
+ * are small positive numbers that would collide with errno — and do not belong
+ * here. Read those with modbusmq_frame_error_code().
  *
- * @return string description of errno
+ * @param nerrno: a MODBUSMQ_ERR_* code, or an errno
+ *
+ * @return string description, never 0
  */ 
 const char *
 modbusmq_strerror(int nerrno)
 {
+    switch(nerrno)
+    {
+    case MODBUSMQ_ERR_TRANSPORT:
+        return "connection lost";
+    case MODBUSMQ_ERR_PROTOCOL:
+        return "frame rejected, stream resynced";
+    case MODBUSMQ_ERR_TIMEOUT:
+        return "no response within frame timeout";
+    default:
+        break;
+    }
+
     return strerror(nerrno);
 }
 
@@ -3154,7 +3171,13 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
 int
 modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sleep_time, int16_t *poll_events)
 {
-    millitime_t millisleep = 1000;
+    //
+    // sleep_time is in/out: the caller's value is the ceiling, and the next due
+    // subscription only ever lowers it. 0 means "no ceiling of my own", and
+    // gets the 1000 ms default. A caller with its own timer due sooner passes
+    // that instead and gets it back untouched when no subscription beats it.
+    //
+    millitime_t millisleep = (*sleep_time > 0) ? *sleep_time : 1000;
 
     //    modbusmq_timer_debug_print(context);
     

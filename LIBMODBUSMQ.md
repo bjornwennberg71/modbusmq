@@ -133,7 +133,7 @@ if (rc > 0)
 }
 else if (rc < 0)
 {
-    fprintf(stderr, "send failed: rc=%d\n", rc);
+    fprintf(stderr, "send failed: %s\n", modbusmq_strerror(rc));
 }
 else
 {
@@ -240,10 +240,11 @@ until the next subscription is due, so an idle poller sleeps exactly as long as
 it should and no longer. Lower it afterwards if one of your own timers is due
 sooner — never raise it.
 
-It is a pure **out** parameter, despite looking like an in/out one: whatever you
-store there before the call is discarded, and the library writes its own answer
-over it, capped at its internal 1000 ms ceiling. Initialising it to 1000 first,
-as the loop above does, changes nothing — it just happens to match.
+It is a genuine **in/out** parameter: what you pass in is your own ceiling, and
+the library only ever lowers it to whenever the next subscription is due. Pass 0
+to say you have no ceiling of your own and take the 1000 ms default. So a caller
+with its own timer due in 250 ms passes 250 and gets 250 back unless a
+subscription beats it.
 
 Nothing here is exclusive. Your MQTT socket, your control socket, your timer
 descriptor all go into the same `pollfds` array. The library asks only that it
@@ -355,18 +356,19 @@ The error callback gives you the failed pair and the code:
 ```c
 void on_error(struct modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
 {
-    fprintf(stderr, "%s error=%d\n", modbusmq_msg_tag(context, msg), error);
+    fprintf(stderr, "%s %s\n", modbusmq_msg_tag(context, msg), modbusmq_strerror(error));
 }
 ```
 
 `msg` is owned by the library and is freed as soon as the callback returns. Copy
 anything that must outlive it.
 
-Do not reach for `modbusmq_strerror()` here. Despite the name it is a thin
-wrapper over `strerror(3)` and knows nothing about the `MODBUSMQ_ERR_*` codes —
-handing it one produces `"Unknown error -1"`. It is for an `errno` you picked up
-alongside a failure, not for the library's own return codes. Map those yourself,
-or just print the number.
+`modbusmq_strerror()` takes either a `MODBUSMQ_ERR_*` code or an `errno` and
+describes it — the library's codes are negative and an `errno` is not, so the
+sign picks the namespace and one call covers both. Modbus exception codes
+reported by a device are a third namespace (small positive numbers that would
+collide with `errno`) and are not handled there; read those with
+`modbusmq_frame_error_code()`.
 
 ---
 
