@@ -18,7 +18,18 @@ include_directories(../lib)
 #
 add_executable(modbusmq_prog modbusmq.c)
 set_target_properties(modbusmq_prog PROPERTIES OUTPUT_NAME modbusmq)
-target_link_libraries(modbusmq_prog modbusmq mosquitto)
+target_link_libraries(modbusmq_prog modbusmq)
+
+#
+# Only link libmosquitto when MQTT is actually compiled in. Linking it
+# unconditionally meant a default build -- MQTT is off unless setup.sh is given
+# --enable-mqtt -- still needed libmosquitto installed to link at all, so
+# anyone without the dev package could not build the program the README tells
+# them to build.
+#
+if(MQTT_ENABLED)
+    target_link_libraries(modbusmq_prog mosquitto)
+endif()
 
 
 #

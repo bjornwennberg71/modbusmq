@@ -69,6 +69,20 @@ run_config()
         echo "  ok   builds with no warnings"
     fi
 
+    #
+    # A machine with libmosquitto installed links it happily even when MQTT is
+    # off, so the missing-dependency bug is invisible here and only shows up on
+    # a clean one. Assert on the actual link instead.
+    #
+    if [ "$mqtt" = "OFF" ]; then
+        if ldd "$dir/programs/modbusmq" 2>/dev/null | grep -qi mosquitto; then
+            echo "  FAIL: modbusmq links libmosquitto in an MQTT_ENABLED=OFF build"
+            FAILED=$((FAILED+1))
+        else
+            echo "  ok   does not link libmosquitto"
+        fi
+    fi
+
     if bash "$HERE/run_tests.sh" "$dir"; then
         echo "  ok   suite passed with MQTT_ENABLED=$mqtt"
     else
