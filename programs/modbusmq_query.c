@@ -49,6 +49,7 @@ static global_info GI;
 void
 print_help(int argc, char **argv, int print_long)
 {
+    (void)argc;
     printf("read : %s connect-string slave-id register_type addr naddr byte-size\n", argv[0]);
     printf("write: %s connect-string slave-id register_type addr --write value [--format fmt] [--mod n] [--mul n] [--add n] [--dry-run]\n", argv[0]);
     printf("example: %s <rtu:///dev/ttyUSB3:9600:1:8:N | tcp://hostname:port> slave_id <%s | %s | %s>  addr naddr <-4|-2> \n", argv[0], MODBUSMQ_TYPE_INPUT_REGISTER, MODBUSMQ_TYPE_HOLDING_REGISTER, MODBUSMQ_TYPE_COIL);

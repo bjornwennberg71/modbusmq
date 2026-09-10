@@ -79,11 +79,22 @@ run_program()
         return
     fi
 
-    if "$bin" "$CONFIG" > "$TMP/$name.log" 2>&1; then
+    # timeout, not just for tidiness: a regression in the send-timeout clamping
+    # would hang rather than fail, and a hung test wedges CI instead of failing it
+    timeout 60 "$bin" "$CONFIG" > "$TMP/$name.log" 2>&1
+    local rc=$?
+
+    if [ $rc -eq 0 ]; then
         sed 's/^/    /' "$TMP/$name.log" | grep -E "ok:|==" || true
         ok "$name"
+        return
+    fi
+
+    sed 's/^/    /' "$TMP/$name.log"
+
+    if [ $rc -eq 124 ]; then
+        bad "$name (timed out after 60s)"
     else
-        sed 's/^/    /' "$TMP/$name.log"
         bad "$name"
     fi
 }

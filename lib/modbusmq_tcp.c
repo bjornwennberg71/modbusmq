@@ -235,6 +235,7 @@ modbusmq_tcp_flush(modbusmq_context_t *context)
 int
 modbusmq_tcp_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 {
+    (void)context;
     int
         rc;
 
@@ -265,6 +266,7 @@ modbusmq_tcp_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 int
 modbusmq_tcp_frame_check(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     // writing
     if (frame->is_writer == 0)
     {
@@ -582,6 +584,7 @@ modbusmq_tcp_msg_prepare(modbusmq_context_t *context, modbusmq_msg_t *msg)
 int
 modbusmq_tcp_frame_transaction_id( modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     uint16_t
         transaction_id;
     
@@ -596,6 +599,7 @@ modbusmq_tcp_frame_transaction_id( modbusmq_context_t *context, modbusmq_frame_t
 int
 modbusmq_tcp_frame_slave(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[6];
 }
 
@@ -607,6 +611,7 @@ modbusmq_tcp_frame_slave(modbusmq_context_t *context, modbusmq_frame_t *frame)
 uint8_t *
 modbusmq_tcp_frame_data(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     if (frame->is_writer)
     {
         return frame->buf + 12;
@@ -621,6 +626,7 @@ modbusmq_tcp_frame_data(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_tcp_frame_function( modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[7];
 }
 
@@ -634,6 +640,7 @@ modbusmq_tcp_frame_function( modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_tcp_frame_addr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     if (frame->is_writer)
     {
         uint16_t
@@ -654,6 +661,7 @@ modbusmq_tcp_frame_addr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_tcp_frame_naddr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     if (frame->is_writer)
     {
         uint16_t
@@ -674,6 +682,7 @@ modbusmq_tcp_frame_naddr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_tcp_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     //
     // Only a read response carries a byte count. In a write echo buf[8] is the
     // high byte of the address and in an exception it is the error code, so
@@ -711,6 +720,7 @@ modbusmq_tcp_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_tcp_frame_error_code( modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     if (!frame->is_writer)
     {
         return frame->buf[8];
@@ -789,6 +799,7 @@ modbusmq_tcp_write_register(modbusmq_context_t *context, modbusmq_frame_t *frame
 int
 modbusmq_tcp_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits, const uint8_t *bits)
 {
+    (void)bits;
     return modbusmq_tcp_frame_init(context, frame, MODBUSMQ_WRITE_MULTIPLE_COILS, addr, nbits);
 }
 
@@ -806,6 +817,7 @@ modbusmq_tcp_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_tcp_write_registers(modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nb, const uint16_t *values)
 {
+    (void)values;
     return modbusmq_tcp_frame_init(context, frame, MODBUSMQ_WRITE_MULTIPLE_REGISTERS, addr, nb);
 }
 
@@ -818,6 +830,7 @@ modbusmq_tcp_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_tcp_write_mask_registers( struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int and_mask, int or_mask)
 {
+    (void)or_mask;
     //
     // Header only: unit, function, address, AND-mask. The OR-mask is appended
     // by modbusmq_frame_write_mask_registers().

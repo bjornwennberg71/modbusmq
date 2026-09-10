@@ -236,6 +236,29 @@ main(int argc, char **argv)
     test_sleep_time(context);
 
     //
+    // a negative mswait must not turn into an unbounded wait
+    //
+    printf("send timeout clamping\n");
+    {
+        modbusmq_msg_t
+            neg;
+        memset(&neg, 0, sizeof(neg));
+
+        modbusmq_set_slave(context, input->slave);
+        modbusmq_frame_read_input_registers(context, &neg.frame[0], input->address, input->naddress);
+
+        millitime_t
+            t0 = millitime();
+
+        modbusmq_send(context, &neg, -1);
+
+        millitime_t
+            elapsed = millitime() - t0;
+
+        CHECK(elapsed < 1000, "negative mswait returns promptly instead of waiting forever");
+    }
+
+    //
     // a closed connection is reported, not hidden
     //
     printf("teardown\n");

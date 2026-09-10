@@ -930,13 +930,9 @@ main(int argc, char **argv)
         tv;
     int
         fd_max = 0;
-    millitime_t
-        start_time_ms = millitime();
-    
+
     while(1)
     {
-        millitime_t
-            time_now = millitime();
 
         millitime_t
             millisleep = 1000; // 1 second default wait time

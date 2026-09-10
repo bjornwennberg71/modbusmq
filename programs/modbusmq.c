@@ -391,6 +391,7 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 static void
 mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message)
 {
+    (void)mosq;
     struct modbusmq_context_t
         *context = (struct modbusmq_context_t *)userdata;
     modbusmq_config_t
@@ -508,6 +509,7 @@ mqtt_subscribe_writes(void)
 void
 print_help(int argc, char **argv, int print_long)
 {
+    (void)argc;
     printf("Usage: %s -c config [-e key=value ...] [-v]\n", argv[0]);
 
     if (print_long)
@@ -621,9 +623,6 @@ int set_nonblocking(int fd)
 int
 mqtt_try_reconnect(modbusmq_connect_t *connect)
 {
-    modbusmq_config_t
-        *modbusmq_config = modbusmq_config_get();
- 
     millitime_t now = millitime();
  
     if (now < GI.mqtt_reconnect_at_ms)
@@ -929,9 +928,7 @@ main(int argc, char **argv)
     //
     {
         struct pollfd pollfds[10];
-        
-        millitime_t
-            start_time_ms = millitime();
+
         while(1)
         {
             millitime_t

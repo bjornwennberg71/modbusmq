@@ -529,6 +529,7 @@ modbusmq_strerror(int nerrno)
 void
 modbusmq_frame_debug(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     char
         azLine[2000];
     azLine[0] = 0;
@@ -913,8 +914,6 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
     uint8_t
         *data    = modbusmq_frame_data(context, &msg->frame[1]);
     int
-        value_len = 4;
-    int
         offset = modbusmq_channel_byte_offset(config, input, channel);
     float
         f = 0;
@@ -947,16 +946,16 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
         case modbusmq_data_format_float_badc:  f = modbusmq_read_float_badc(data + offset); break;
         case modbusmq_data_format_float_dcba:  f = modbusmq_read_float_dcba(data + offset); break;
         case modbusmq_data_format_float_cdab:  f = modbusmq_read_float_cdab(data + offset); break;
-        case modbusmq_data_format_ab:          f = modbusmq_read_int16_ab(data + offset);  value_len = 2; break;
-        case modbusmq_data_format_ba:          f = modbusmq_read_int16_ba(data + offset); value_len = 2;break;
-        case modbusmq_data_format_int16_ab:    f = modbusmq_read_int16_ab_signed(data + offset); value_len = 2; break;
-        case modbusmq_data_format_int16_ba:    f = modbusmq_read_int16_ba_signed(data + offset); value_len = 2; break;
+        case modbusmq_data_format_ab:          f = modbusmq_read_int16_ab(data + offset); break;
+        case modbusmq_data_format_ba:          f = modbusmq_read_int16_ba(data + offset);break;
+        case modbusmq_data_format_int16_ab:    f = modbusmq_read_int16_ab_signed(data + offset); break;
+        case modbusmq_data_format_int16_ba:    f = modbusmq_read_int16_ba_signed(data + offset); break;
         case modbusmq_data_format_abcd:        f = (int32_t)(uint32_t)modbusmq_read_int32_abcd(data + offset); break;
         case modbusmq_data_format_badc:        f = (int32_t)(uint32_t)modbusmq_read_int32_badc(data + offset); break;
         case modbusmq_data_format_uint32_abcd: f = (uint32_t)modbusmq_read_int32_abcd(data + offset); break;
         case modbusmq_data_format_uint32_badc: f = (uint32_t)modbusmq_read_int32_badc(data + offset); break;
-        case modbusmq_data_format_a:           f = data[offset]; value_len = 1; break;
-        case modbusmq_data_format_int8:        f = (int8_t)data[offset]; value_len = 1; break;
+        case modbusmq_data_format_a:           f = data[offset]; break;
+        case modbusmq_data_format_int8:        f = (int8_t)data[offset]; break;
         default:
             modbusmq_logf(LOG_ERROR, "channel %s: unhandled data format %d. action: skip channel\n",
                           channel->topic ? channel->topic : "?", (int)channel->format);
@@ -1504,8 +1503,6 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
 
     char
         *ptr;
-    int
-        len;
 
     memset(connect, 0, sizeof(modbusmq_connect_t));
     
@@ -1539,8 +1536,6 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
 
     // for some reason, strtok does not work the same way on MIPS32 5.4.72
 
-    char
-        buf[200];
     if (connect->connect_type == MODBUSMQ_CONNECT_TCP)
     {
         int matched = sscanf(input_string, "tcp://%199[^:]:%d", connect->device, &connect->port);
@@ -1577,13 +1572,24 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
 
         int matched = sscanf(input_string, "mqtt://%199[^:]:%d", connect->device, &connect->port);
 
-        // connect->port = strtod(buf, NULL);
         if (modbusmq_debug)
         {
             printf("mqtt device = %s\n", connect->device);
             printf("mqtt port   = %d\n", connect->port);
         }
-        
+
+        //
+        // Same contract as the tcp and rtu branches above: a string that does
+        // not yield both a host and a port is a parse failure. Falling through
+        // as success left port 0 behind and turned a typo into a confusing
+        // connect error much later.
+        //
+        if (matched == 2)
+        {
+            return 0;
+        }
+
+        return -2;
     }
     else
     {
@@ -1842,9 +1848,6 @@ modbusmq_frame_read_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *fra
         return -1;
     }
 
-    int
-        nb = (nbits / 8) + ((nbits%8) ? 1 : 0);
-    
     context->cb.modbusmq_read_coil_bits(context, frame, addr, nbits);
 
     return frame->length;
@@ -1875,8 +1878,6 @@ modbusmq_frame_read_input_bits(modbusmq_context_t *context, modbusmq_frame_t *fr
         return -1;
     }
     
-    int
-        nb = (nbits / 8) + ((nbits%8) ? 1 : 0);
     context->cb.modbusmq_read_input_bits(context, frame, addr, nbits);
 
     // header[*] + byte count[1] + number-of-bytes[1]
@@ -2248,8 +2249,7 @@ modbusmq_post_internal(modbusmq_context_t *context, modbusmq_msg_t *msg, int fla
     memset(wrapper, 0, sizeof(modbusmq_msg_wrapper_t));
     memcpy(&wrapper->msg, msg, sizeof(modbusmq_msg_t));
 
-    int
-        rc = modbusmq_msg_prepare(context, &wrapper->msg);
+    modbusmq_msg_prepare(context, &wrapper->msg);
     
     wrapper->flags        = flags;
 
@@ -3171,6 +3171,7 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
 int
 modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sleep_time, int16_t *poll_events)
 {
+    (void)poll_events;
     //
     // sleep_time is in/out: the caller's value is the ceiling, and the next due
     // subscription only ever lowers it. 0 means "no ceiling of my own", and
@@ -3425,7 +3426,9 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
  * 
  * @param context: allocated context
  * @param msg: message to send
- * @param mswait: maximum time to wait in milliseconds (0 = non-blocking)
+ * @param mswait: maximum time to wait in milliseconds. 0 is non-blocking, and
+ *                a negative value is treated as 0 rather than compared against
+ *                an unsigned elapsed time, which would have waited forever.
  *
  * @return 0 when a complete, validated response was received
  *         > 0 when the wait expired without one
@@ -3450,6 +3453,14 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
     msg->req_id = modbusmq_next_req_id(context);
 
     struct pollfd pollfds[10];
+
+    //
+    // Clamped and widened once here: the loop below compares this against an
+    // unsigned elapsed time, so a negative mswait would otherwise convert to a
+    // huge positive wait.
+    //
+    millitime_t
+        wait_ms = (mswait > 0) ? (millitime_t)mswait : 0;
 
     millitime_t
         start_time_ms = millitime(),
@@ -3559,7 +3570,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
 
             }
         }
-    } while ((time_now - start_time_ms) < mswait);
+    } while ((time_now - start_time_ms) < wait_ms);
 
     if (result > 0)
     {

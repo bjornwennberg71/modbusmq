@@ -111,6 +111,18 @@ test_connect_string(void)
 
     memset(&c, 0, sizeof(c));
     CHECK(modbusmq_parse_connect_string("nonsense", &c) != 0, "garbage is rejected");
+
+    // mqtt:// validates like the other two: host and port, or a failure
+    memset(&c, 0, sizeof(c));
+    CHECK_INT(modbusmq_parse_connect_string("mqtt://broker.local:1883", &c), 0, "parse mqtt");
+    CHECK_INT(c.connect_type, MODBUSMQ_CONNECT_MQTT, "mqtt connect_type");
+    CHECK_STR(c.device, "broker.local", "mqtt host");
+    CHECK_INT(c.port, 1883, "mqtt port");
+
+    // a missing port used to parse as success with port 0
+    memset(&c, 0, sizeof(c));
+    CHECK(modbusmq_parse_connect_string("mqtt://broker.local", &c) != 0,
+          "mqtt without a port is rejected");
 }
 
 //

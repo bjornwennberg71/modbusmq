@@ -505,6 +505,7 @@ modbusmq_rtu_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 int
 modbusmq_rtu_frame_check(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     // NOTE: this function is only ever called with frame->is_writer == 0
     // (the reader/response frame), so the branch below is the one that
     // actually executes; the length-check logic in the is_writer!=0 branch
@@ -727,6 +728,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
 int
 modbusmq_rtu_frame_slave(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[0];
 }
 
@@ -738,6 +740,7 @@ modbusmq_rtu_frame_slave(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_rtu_frame_function(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[1];
 }
 
@@ -749,6 +752,7 @@ modbusmq_rtu_frame_function(modbusmq_context_t *context, modbusmq_frame_t *frame
 int
 modbusmq_rtu_frame_addr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[2] << 8 | frame->buf[3];
 }
 
@@ -761,6 +765,7 @@ modbusmq_rtu_frame_addr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_rtu_frame_naddr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[4] << 8 | frame->buf[5];
 }
 
@@ -772,6 +777,7 @@ modbusmq_rtu_frame_naddr(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_rtu_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     //
     // Only a read response carries a byte count. In a write echo buf[2] is the
     // high byte of the address and in an exception it is the error code, so
@@ -802,6 +808,7 @@ modbusmq_rtu_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 int
 modbusmq_rtu_frame_error_code( modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     return frame->buf[2];
 }
 
@@ -811,6 +818,7 @@ modbusmq_rtu_frame_error_code( modbusmq_context_t *context, modbusmq_frame_t *fr
 uint8_t *
 modbusmq_rtu_frame_data( modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
+    (void)context;
     if (frame->is_writer)
     {
         return frame->buf + 6;
@@ -851,6 +859,7 @@ modbusmq_rtu_frame_init(modbusmq_context_t *context, modbusmq_frame_t *frame, in
 int
 modbusmq_rtu_msg_prepare(modbusmq_context_t *context, modbusmq_msg_t *msg)
 {
+    (void)context;
     modbusmq_frame_t *writer = msg->frame[0].is_writer ? &msg->frame[0] : &msg->frame[1];
     modbusmq_frame_t *reader = msg->frame[1].is_writer == 0 ? &msg->frame[1] : &msg->frame[0];
 
@@ -944,6 +953,7 @@ modbusmq_rtu_write_register(modbusmq_context_t *context, modbusmq_frame_t *frame
 int
 modbusmq_rtu_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int nbits, const uint8_t *bits)
 {
+    (void)bits;
     return modbusmq_rtu_frame_init(context, frame, MODBUSMQ_WRITE_MULTIPLE_COILS, addr, nbits);
 }
 
@@ -958,6 +968,7 @@ modbusmq_rtu_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_rtu_write_registers(modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int naddr, const uint16_t *values)
 {
+    (void)values;
     return modbusmq_rtu_frame_init(context, frame, MODBUSMQ_WRITE_MULTIPLE_REGISTERS, addr, naddr);
 }
 
@@ -970,6 +981,7 @@ modbusmq_rtu_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fram
 int
 modbusmq_rtu_write_mask_registers( struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int and_mask, int or_mask)
 {
+    (void)or_mask;
     //
     // Header only: slave, function, address, AND-mask. The OR-mask is appended
     // by modbusmq_frame_write_mask_registers(), the same split the other write
