@@ -124,8 +124,11 @@ modbusmq_channel_debug(modbusmq_channel_t *channel)
 void
 modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg, modbusmq_input_t *input)
 {
+#if MQTT_ENABLED
+    // only the publish path below reads it, and that path is compiled out
     modbusmq_config_t
         *modbusmq_config = modbusmq_config_get();
+#endif
     char
         value[100];
 
