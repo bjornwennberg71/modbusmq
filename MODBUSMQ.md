@@ -339,6 +339,9 @@ info: factory/line1/sensors/inlet_temperature=21.5
 
 ## See also
 
+- **[LIBMODBUSMQ.md](LIBMODBUSMQ.md)** — the C library, if a config file is not
+  enough and you want to build your own program on it.
+
 - [config/CONFIG.md](config/CONFIG.md) — every key, in reference form
 - config/example1.config → example3.config, graded from minimal to everything
 - [README.md](README.md) — the other two programs

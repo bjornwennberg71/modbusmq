@@ -72,6 +72,10 @@ configuration. That is now the main way the project gets used.
 **[MODBUSMQ.md](MODBUSMQ.md) — how to set up `modbusmq` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
+### Building on the library
+**[LIBMODBUSMQ.md](LIBMODBUSMQ.md) — the C API: contexts, requests, the event loop,
+subscriptions and error handling.**
+
 `.config` files describe:
 - Device connection (TCP or RTU)  
 - Registers/coils to read  
@@ -97,6 +101,7 @@ modbusmq/
 ├── programs/modbusmq_server.c # Virtual Modbus device emulator
 ├── config/*.config # Device configuration examples
 ├── MODBUSMQ.md  # Setting up modbusmq
+├── LIBMODBUSMQ.md # The C library API
 ├── config/CONFIG.md # Config file key reference
 
 ```
