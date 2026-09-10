@@ -441,6 +441,106 @@ modbusmq_config_write_function(const char *value)
 //////////////////////////////////////////////////////////////////////////////
 // 
 // 
+//////////////////////////////////////////////////////////////////////////////
+//
+// Command line key overrides (-e key=value).
+//
+// The list is borrowed, not copied: it points straight at argv. matched[] runs
+// parallel to it so we can tell afterwards which entries never fired.
+//
+static char *const *config_overrides      = 0;
+static int          config_noverrides     = 0;
+static uint8_t     *config_override_hit   = 0;
+
+void
+modbusmq_config_set_overrides(char *const *overrides, int noverrides)
+{
+    free(config_override_hit);
+    config_override_hit = 0;
+
+    config_overrides  = overrides;
+    config_noverrides = (overrides && noverrides > 0) ? noverrides : 0;
+
+    if (config_noverrides > 0)
+    {
+        config_override_hit = calloc(config_noverrides, sizeof(uint8_t));
+        if (!config_override_hit)
+        {
+            perror("Unable to allocate");
+            config_noverrides = 0;
+        }
+    }
+}
+
+//
+// @brief Look up key in the override list.
+//
+// @return the override value to use instead of the file's, or 0 for no match.
+//
+static const char *
+config_override_lookup(const char *key)
+{
+    if (!key || config_noverrides <= 0)
+    {
+        return 0;
+    }
+
+    int
+        nkey = strlen(key);
+
+    for(int o = 0; o < config_noverrides; ++o)
+    {
+        const char
+            *entry = config_overrides[o];
+        if (!entry)
+        {
+            continue;
+        }
+
+        // match "key" against "key=value" without copying either
+        if (strncmp(entry, key, nkey) != 0 || entry[nkey] != '=')
+        {
+            continue;
+        }
+
+        if (config_override_hit)
+        {
+            config_override_hit[o] = 1;
+        }
+        return entry + nkey + 1;
+    }
+
+    return 0;
+}
+
+//
+// @brief Warn about overrides that never matched a key in the config file.
+//
+// An override only replaces a line the file already has, so one that never
+// fired is silently doing nothing — a typo, or a key this config does not set.
+//
+// @return number of overrides that never matched
+//
+int
+modbusmq_config_override_unmatched(void)
+{
+    int
+        unmatched = 0;
+
+    for(int o = 0; o < config_noverrides; ++o)
+    {
+        if (config_override_hit && config_override_hit[o])
+        {
+            continue;
+        }
+        fprintf(stderr, "-e %s: key never appears in the config file, override not applied\n",
+                config_overrides[o] ? config_overrides[o] : "");
+        unmatched++;
+    }
+
+    return unmatched;
+}
+
 int
 modbusmq_config_parse(const char *filename)
 {
@@ -517,6 +617,22 @@ modbusmq_config_parse(const char *filename)
         if (!key || !key[0] || !value || !value[0])
         {
             continue;
+        }
+
+        //
+        // -e key=value wins over the file's value for this key. Everything
+        // below sees the substituted value and neither knows nor cares.
+        //
+        const char
+            *override = config_override_lookup(key);
+        if (override)
+        {
+            if (modbusmq_get_debug() > 0)
+            {
+                fprintf(stderr, "%d: %s = %s (overridden by -e, file said %s)\n",
+                        line_num, key, override, value);
+            }
+            value = (char *)override;
         }
 
         if (strcmp(key, "config.name") == 0)

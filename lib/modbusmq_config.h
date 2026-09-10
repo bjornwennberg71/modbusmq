@@ -321,6 +321,27 @@ extern int                 modbusmq_config_parse(const char *filename);
 extern modbusmq_config_t * modbusmq_config_get();
 
 //
+// Command line overrides for config keys.
+//
+// Each entry is a "key=value" string using exactly the same key names the
+// config file uses. While the file is parsed, every key found in it is looked
+// up here first, and a match substitutes the override's value for the file's.
+// That is the whole mechanism: an override edits a line the file already has,
+// it does not add one the file is missing. So
+//
+//     modbusmq -c tcp_device.config -e modbusmq.connect=rtu:///dev/ttyUSB0:9600:1:8:N
+//
+// runs a TCP config over RTU, because modbusmq.connect is a line that config
+// already carries.
+//
+// Set these before modbusmq_config_parse(); the list is not copied, so it must
+// outlive the parse. modbusmq_config_override_unmatched() reports entries that
+// never matched a key, which is almost always a typo or a key the file lacks.
+//
+extern void                modbusmq_config_set_overrides(char *const *overrides, int noverrides);
+extern int                 modbusmq_config_override_unmatched(void);
+
+//
 // Clear every channel's publish state (published/last_value/last_publish_ms).
 //
 // Call this whenever the MQTT connection is (re)established. A broker restart

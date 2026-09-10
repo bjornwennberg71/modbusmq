@@ -2,7 +2,12 @@
 
 Reference for every config key. For a walkthrough of setting up
 `modbusmq` — finding the device, building the config, checking it
-without hardware — see [BRIDGE.md](../BRIDGE.md).
+without hardware — see [MODBUSMQ.md](../MODBUSMQ.md).
+
+Any key documented here can be overridden for a single run with `modbusmq -e key=value`,
+using the name exactly as it appears below. The override replaces the value on a line
+the file already has — it does not add a key the file is missing — and it applies at the
+point that line is read, so `-e input.max=9` is seen by the `input.N` blocks below it.
 
 Config files use a simple `key = value` format. `#` starts a comment — everything after it on the line is ignored. Whitespace around keys and values is stripped automatically.
 

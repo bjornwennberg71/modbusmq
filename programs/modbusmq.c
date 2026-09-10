@@ -2,7 +2,7 @@
 // 
 // bjornwennberg71@gmail.com
 // 
-// modbusmq_bridge.c
+// modbusmq.c
 // 
 
 // INCLUDES //////////////////////////////////////////////////////////////////
@@ -33,10 +33,17 @@ const char *version = MODBUSMQ_VERSION_STRING;
 //
 // global parameters from settings / argument line
 //
+#define MAX_CONFIG_OVERRIDES 64
+
 typedef struct global_info
 {
     char config_filename[300];
     int  has_config;
+
+    // -e key=value entries, pointing straight into argv
+    char *overrides[MAX_CONFIG_OVERRIDES];
+    int   noverrides;
+
     int  has_mqtt;
     int  mqtt_connected;              // 1 = connected to broker, 0 = disconnected
     millitime_t mqtt_reconnect_at_ms; // when to attempt next reconnect
@@ -501,11 +508,21 @@ mqtt_subscribe_writes(void)
 void
 print_help(int argc, char **argv, int print_long)
 {
-    printf("Usage: %s -c config\n", argv[0]);
+    printf("Usage: %s -c config [-e key=value ...] [-v]\n", argv[0]);
 
     if (print_long)
     {
-        printf("-c config: read from config-file\n");
+        printf("-c config    : read from config-file\n");
+        printf("-e key=value : override one config key, using the same key names the\n");
+        printf("               config file uses. Repeatable. An override replaces the\n");
+        printf("               value on a line the file already has; it does not add a\n");
+        printf("               key the file is missing.\n");
+        printf("               -e modbusmq.connect=rtu:///dev/ttyUSB0:9600:1:8:N\n");
+        printf("                   run a tcp config over rtu\n");
+        printf("               -e input.max=9\n");
+        printf("                   read every input the file defines, not just the\n");
+        printf("                   first input.max of them\n");
+        printf("-v           : increase verbosity\n");
     }
     
 }
@@ -527,7 +544,7 @@ parse_argv(int argc, char **argv)
         }
         else if (strstr(argv[a], "--v")) // --version
         {
-            printf("modbusmq_bridge version: %s\n", version);
+            printf("modbusmq version: %s\n", version);
             return 1;
         }
         else if (strcmp(argv[a], "-c") == 0 ||
@@ -547,6 +564,27 @@ parse_argv(int argc, char **argv)
             }
             strcpy(GI.config_filename, argv[a]);
             GI.has_config = 1;
+        }
+        else if (strcmp(argv[a], "-e") == 0)
+        {
+            a++;
+            if (a >= argc)
+            {
+                printf("-e requires key=value\n");
+                print_help(argc, argv, 0);
+                return -1;
+            }
+            if (!strchr(argv[a], '=') || argv[a][0] == '=')
+            {
+                printf("-e %s: expected key=value\n", argv[a]);
+                return -1;
+            }
+            if (GI.noverrides >= MAX_CONFIG_OVERRIDES)
+            {
+                printf("-e: too many overrides (max %d)\n", MAX_CONFIG_OVERRIDES);
+                return -1;
+            }
+            GI.overrides[GI.noverrides++] = argv[a];
         }
         else if (strcmp(argv[a], "-v") == 0)
         {
@@ -657,13 +695,25 @@ main(int argc, char **argv)
     
     if (GI.has_config)
     {
+        modbusmq_config_set_overrides(GI.overrides, GI.noverrides);
+
         rc = modbusmq_config_parse(GI.config_filename);
         if (rc != 0)
         {
             printf("Unable to parse config-file.\n");
             return -1;
         }
-            
+
+        //
+        // An override that matched no key did nothing at all, which means we
+        // are not running what was asked for -- a typo'd -e modbusmq.connect
+        // would quietly leave us talking to the config's device instead of the
+        // one on the command line. Refuse rather than run the wrong thing.
+        //
+        if (modbusmq_config_override_unmatched() > 0)
+        {
+            return -1;
+        }
     }
 
     modbusmq_config_t

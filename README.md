@@ -69,7 +69,7 @@ configuration. That is now the main way the project gets used.
 - **modbusmq_server** — virtual Modbus device emulator returning `.config` default values  
 
 ### Configuration
-**[BRIDGE.md](BRIDGE.md) — how to set up `modbusmq` and write its config file.**
+**[MODBUSMQ.md](MODBUSMQ.md) — how to set up `modbusmq` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
 `.config` files describe:
@@ -96,7 +96,7 @@ modbusmq/
 ├── programs/modbusmq_query.c # One-shot query tool
 ├── programs/modbusmq_server.c # Virtual Modbus device emulator
 ├── config/*.config # Device configuration examples
-├── BRIDGE.md    # Setting up modbusmq
+├── MODBUSMQ.md  # Setting up modbusmq
 ├── config/CONFIG.md # Config file key reference
 
 ```
@@ -179,12 +179,30 @@ across a reconnect, it re-subscribes every write topic when the MQTT link comes 
 
 Supporting a new meter, battery or inverter is a `.config` file. No C.
 
-**Setting one up: [BRIDGE.md](BRIDGE.md).**
+**Setting one up: [MODBUSMQ.md](MODBUSMQ.md).**
 
 ```
 ./modbusmq -c accuvim_ii.config
 ./modbusmq -c polarium.config
 ```
+
+### Overriding config keys with -e
+
+`-e key=value` replaces one config key for a single run, using the same key names
+the file uses. Repeatable. The substitution happens as the file is read, so the
+override lands at the point the key appears rather than after the parse.
+
+```
+# run a tcp config over rtu, without editing or copying the file
+./modbusmq -c accuvim_ii.config -e modbusmq.connect=rtu:///dev/ttyUSB0:9600:1:8:N
+
+# read every input the file defines, not just the first input.max of them
+./modbusmq -c shoto.config -e input.max=9
+```
+
+An override edits a line the config already has; it does not add one the config
+is missing. An override that matched nothing is reported and the run refused, so
+a mistyped key stops instead of quietly running against the config's own device.
 
 ## modbusmq_query
 
@@ -242,7 +260,8 @@ Example:
 ```
 ./modbusmq_server -c shoto.config &
 # Use -v if you want to know some details about the request/response
-./modbusmq -c ../config/shoto.config -v
+# -e points the config at the virtual server without editing or copying it
+./modbusmq -c ../config/shoto.config -e modbusmq.connect=tcp://localhost:1502 -v
 ```
 
 Sample `-v` output (one battery module shown, trimmed):

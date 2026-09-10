@@ -148,9 +148,9 @@ publishes with three decimals. Set `decimals` on the channel to override.
 config can be verified before going near hardware:
 
 ```bash
-# point a copy of the config at tcp://localhost:1502, give channels a value =
+# give the channels a value =, then point both at the virtual server with -e
 ./modbusmq_server -c my_device.config &
-./modbusmq -c my_device.config -v
+./modbusmq -c my_device.config -e modbusmq.connect=tcp://localhost:1502 -v
 ```
 
 This confirms offsets, formats and scaling. It cannot confirm the register
@@ -158,7 +158,37 @@ addresses are the ones the real device uses.
 
 ---
 
-## 7. Bits: coils and discrete inputs
+## 7. Overriding config keys with -e
+
+`-e key=value` replaces the value of one config key for this run, using the same
+key names the file uses. Repeatable. It is a substitution made while the file is
+read, so it applies at the point the key appears, not afterwards.
+
+```bash
+# run a tcp config over rtu, without editing or copying the file
+./modbusmq -c my_device.config -e modbusmq.connect=rtu:///dev/ttyUSB0:9600:1:8:N
+
+# read every input the file defines, not just the first input.max of them
+./modbusmq -c shoto.config -e input.max=9
+
+# several at once
+./modbusmq -c my_device.config -e modbusmq.connect=tcp://localhost:1502 -e mqtt.qos=1
+```
+
+The one rule worth knowing: **an override edits a line the file already has, it
+does not add one the file is missing.** `-e mqtt.qos=1` does nothing on a config
+that never mentions `mqtt.qos`. That is not silent — an override that matched no
+key is reported and the run is refused, so a typo like `-e modbusmq.conect=...`
+stops rather than quietly leaving you pointed at the config's own device.
+
+Because the substitution happens as the line is read, ordering inside the file
+still applies. `input.max` allocates the input array where it appears, so
+`-e input.max=9` works: the `input.2`..`input.9` blocks further down are read
+against the overridden value. Applied after the parse it would have done nothing.
+
+---
+
+## 8. Bits: coils and discrete inputs
 
 ```
 input.2.type        = discrete_input   # function 02, read-only bits
@@ -180,7 +210,7 @@ with `mul = -1` turns a raw 0 into a published 1.
 
 ---
 
-## 8. Writing from MQTT
+## 9. Writing from MQTT
 
 A `write.N` entry subscribes a topic and writes what arrives. It carries its own
 slave and address, because the register you set a value in is usually not the one
@@ -228,7 +258,7 @@ the config can override.
 
 ---
 
-## 9. MQTT
+## 10. MQTT
 
 ```
 mqtt.name         = my_device        # client id, must be unique on the broker
@@ -279,7 +309,7 @@ exactly as before.
 
 ---
 
-## 10. Reading the log
+## 11. Reading the log
 
 `-v` turns on the frame detail. A healthy run repeats one line per channel per
 interval:
