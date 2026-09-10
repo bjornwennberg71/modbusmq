@@ -178,8 +178,9 @@ read, so it applies at the point the key appears, not afterwards.
 The one rule worth knowing: **an override edits a line the file already has, it
 does not add one the file is missing.** `-e mqtt.qos=1` does nothing on a config
 that never mentions `mqtt.qos`. That is not silent — an override that matched no
-key is reported and the run is refused, so a typo like `-e modbusmq.conect=...`
-stops rather than quietly leaving you pointed at the config's own device.
+key is reported as a warning, so a typo like `-e modbusmq.conect=...` is visible
+in the log rather than quietly leaving you pointed at the config's own device.
+It is a warning and not an error: the run continues.
 
 Because the substitution happens as the line is read, ordering inside the file
 still applies. `input.max` allocates the input array where it appears, so

@@ -201,8 +201,8 @@ override lands at the point the key appears rather than after the parse.
 ```
 
 An override edits a line the config already has; it does not add one the config
-is missing. An override that matched nothing is reported and the run refused, so
-a mistyped key stops instead of quietly running against the config's own device.
+is missing. An override that matched nothing is reported as a warning — visible,
+but it does not stop the run.
 
 ## modbusmq_query
 

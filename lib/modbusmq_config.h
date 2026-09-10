@@ -335,8 +335,9 @@ extern modbusmq_config_t * modbusmq_config_get();
 // already carries.
 //
 // Set these before modbusmq_config_parse(); the list is not copied, so it must
-// outlive the parse. modbusmq_config_override_unmatched() reports entries that
-// never matched a key, which is almost always a typo or a key the file lacks.
+// outlive the parse. modbusmq_config_override_unmatched() warns about entries
+// that never matched a key — usually a typo, or a key the file does not set —
+// and returns how many. It is advisory; what to do about it is the caller's.
 //
 extern void                modbusmq_config_set_overrides(char *const *overrides, int noverrides);
 extern int                 modbusmq_config_override_unmatched(void);

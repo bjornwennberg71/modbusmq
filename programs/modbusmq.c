@@ -705,15 +705,11 @@ main(int argc, char **argv)
         }
 
         //
-        // An override that matched no key did nothing at all, which means we
-        // are not running what was asked for -- a typo'd -e modbusmq.connect
-        // would quietly leave us talking to the config's device instead of the
-        // one on the command line. Refuse rather than run the wrong thing.
+        // An override that matched no key did nothing at all. Say so and keep
+        // going: it is worth noticing, but it is not this program's business
+        // to decide that a config key someone named is a mistake.
         //
-        if (modbusmq_config_override_unmatched() > 0)
-        {
-            return -1;
-        }
+        modbusmq_config_override_unmatched();
     }
 
     modbusmq_config_t

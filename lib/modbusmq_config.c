@@ -518,6 +518,7 @@ config_override_lookup(const char *key)
 //
 // An override only replaces a line the file already has, so one that never
 // fired is silently doing nothing — a typo, or a key this config does not set.
+// This is a warning, not an error: the caller is told and decides for itself.
 //
 // @return number of overrides that never matched
 //
@@ -533,7 +534,7 @@ modbusmq_config_override_unmatched(void)
         {
             continue;
         }
-        fprintf(stderr, "-e %s: key never appears in the config file, override not applied\n",
+        fprintf(stderr, "WARNING: -e %s: key never appears in the config file, override not applied\n",
                 config_overrides[o] ? config_overrides[o] : "");
         unmatched++;
     }
