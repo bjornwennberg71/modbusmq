@@ -372,6 +372,66 @@ its natural spelling — the string itself for `ascii_*`, the digits for `bcd_*`
 undone when serving it, so a config that shifts the epoch on the way in wants
 the unshifted count here.
 
+#### Working out which format a device uses
+
+A datasheet that says "serial number, 16 registers" rarely says which of these
+it means. `modbusmq_query` prints the raw registers, which is enough to tell
+them apart by eye:
+
+```bash
+./modbusmq_query tcp://192.168.1.50:502 1 input_register 0x9C40 16
+```
+
+| What you see                      | What it is |
+|-----------------------------------|------------|
+| `0x5049 0x582D 0x3030 ...`        | ASCII — every byte lands in `0x20`–`0x7E`. `0x50 0x49` is `PI`, so this is `ascii_ab` |
+| `0x4F42 0x2058 0x0033`            | ASCII read backwards — `OB`, `X`, then a stray `3`. Swap to `ascii_ba` and it is `BOX 3` |
+| `0x0012 0x3456 0x7890`            | BCD — every nibble is `0`–`9` and the value looks like the number on the label |
+| `0x04D2 0x162E`                   | a plain integer (1234, 5678), not BCD — the `D` and `E` nibbles rule BCD out |
+| `0x0005 0x000A 0x012C`            | a version, one field per register → `version_regs`, here `5.10.300`. The `300` is why it cannot be a byte-packed format |
+| `0x0207`                          | a version packed into one register → `version_ab` |
+| `0x07EA 0x090E`                   | a date — `0x07EA` is 2026, then month 9, day 14 → `date_ymd_abcd` |
+| `0x68C6 0x7600` (large, climbing)  | epoch seconds — this one is 2025-09-14T08:00:00Z. Two registers; if it decodes to 1970 or 2106, swap to `epoch32_badc` |
+
+Three things worth knowing before you start:
+
+- **A wrong guess usually still decodes.** Registers read at the wrong offset
+  produce plausible-looking rubbish far more often than an error. The BCD and
+  date decoders reject impossible input and skip the channel, but ASCII cannot
+  — it will happily publish `??????`. Check the first read against the label on
+  the device.
+- **Byte order is per register, word order is per pair.** `ascii_ba` swaps the
+  two bytes inside each register; `epoch32_badc` swaps the two registers of a
+  32-bit value. They are different axes and a device can need one, the other,
+  both or neither.
+- **SunSpec devices are the easy case.** The common model block puts
+  manufacturer, model, serial number and version at fixed lengths — 16
+  registers each for `Mn`/`Md`/`SN`, 8 for `Vr` — as ASCII, high byte first,
+  padded with NUL or space. That is `ascii_ab` with `nregisters = 16`, and the
+  padding rules above are written for exactly this.
+
+Verify against the virtual server before going near hardware. Put the value you
+expect in `channel.value`, and `modbusmq_server` will serve it as a real device
+would:
+
+```bash
+./modbusmq_server -c my_device.config -e modbusmq.connect=tcp://localhost:1502 &
+./modbusmq        -c my_device.config -e modbusmq.connect=tcp://localhost:1502 -v
+```
+
+If the string comes back the way you typed it, the format, `offset` and
+`nregisters` agree with each other. It still cannot confirm the addresses match
+the real device — only the device can.
+
+Every text pattern in the table above — all but the plain-integer row — is
+served by `test/test.config` (input 5), so they can be read back and compared
+against a known answer:
+
+```bash
+./modbusmq_server -c test/test.config &
+./modbusmq_query tcp://localhost:15502 1 holding_register 0x0200 37
+```
+
 ### Scaling
 
 Values are scaled in this order:
