@@ -89,7 +89,27 @@ typedef enum modbusmq_data_format_e
     modbusmq_data_format_float_abcd, // float
     modbusmq_data_format_float_badc, // float
     modbusmq_data_format_float_dcba, // float
-    modbusmq_data_format_float_cdab  // float, low word first (common in industrial Modbus devices)
+    modbusmq_data_format_float_cdab, // float, low word first (common in industrial Modbus devices)
+
+    //
+    // Text formats. These decode to a string rather than a number and never
+    // travel through the float path — see modbusmq_read_channel_text().
+    //
+    // Appended at the end on purpose: the numeric values above are what a
+    // config's format name resolves to, and shifting them would change the
+    // meaning of nothing in a file but everything in a core dump.
+    //
+    modbusmq_data_format_ascii_ab,   // 2 chars per register, high byte first
+    modbusmq_data_format_ascii_ba,   // ...with the two bytes of each register swapped
+    modbusmq_data_format_bcd_ab,     // packed BCD digits, high nibble first
+    modbusmq_data_format_bcd_ba,     // ...with the two bytes of each register swapped
+    modbusmq_data_format_version_ab,     // 2 bytes  -> "a.b"
+    modbusmq_data_format_version_abcd,   // 4 bytes  -> "a.b.c.d"
+    modbusmq_data_format_version_regs,   // one uint16 field per register -> "a.b.c"
+    modbusmq_data_format_date_ymd_abcd,  // uint16 year, uint8 month, uint8 day
+    modbusmq_data_format_datetime_regs,  // 6 registers: year, month, day, hour, min, sec
+    modbusmq_data_format_epoch32_abcd,   // uint32 seconds since the epoch
+    modbusmq_data_format_epoch32_badc    // ...word-swapped
 
 } modbusmq_data_format_e;
 
@@ -114,6 +134,39 @@ typedef enum modbusmq_data_format_e
 #define MODBUSMQ_FORMAT_FLOAT_DCBA "float_dcba"
 #define MODBUSMQ_FORMAT_FLOAT_CDAB "float_cdab"
 
+#define MODBUSMQ_FORMAT_ASCII_AB      "ascii_ab"
+#define MODBUSMQ_FORMAT_ASCII_BA      "ascii_ba"
+#define MODBUSMQ_FORMAT_BCD_AB        "bcd_ab"
+#define MODBUSMQ_FORMAT_BCD_BA        "bcd_ba"
+#define MODBUSMQ_FORMAT_VERSION_AB    "version_ab"
+#define MODBUSMQ_FORMAT_VERSION_ABCD  "version_abcd"
+#define MODBUSMQ_FORMAT_VERSION_REGS  "version_regs"
+#define MODBUSMQ_FORMAT_DATE_YMD_ABCD "date_ymd_abcd"
+#define MODBUSMQ_FORMAT_DATETIME_REGS "datetime_regs"
+#define MODBUSMQ_FORMAT_EPOCH32_ABCD  "epoch32_abcd"
+#define MODBUSMQ_FORMAT_EPOCH32_BADC  "epoch32_badc"
+
+//
+// How much wire a text channel may span, and how much text it may decode to.
+//
+// The wire cap is the bound that matters for safety; the text cap is derived
+// from it — packed BCD is the worst expansion at two digits per byte, and a
+// version string adds a separator per field on top of that.
+//
+#define MODBUSMQ_TEXT_BYTES_MAX 64
+#define MODBUSMQ_TEXT_MAX      140
+
+//
+// Default strftime format for the time formats. ISO 8601, UTC, which is the
+// only sane default for a value crossing a broker into somebody else's
+// timezone. channel.timefmt overrides it, channel.timezone picks local.
+//
+// ...and the pattern for a device that reported digits with no timezone
+// attached, where the trailing Z would be a guess rather than a fact.
+#define MODBUSMQ_TIMEFMT_DEFAULT      "%Y-%m-%dT%H:%M:%SZ"
+#define MODBUSMQ_TIMEFMT_NAIVE        "%Y-%m-%dT%H:%M:%S"
+#define MODBUSMQ_DATEFMT_DEFAULT      "%Y-%m-%d"
+
 typedef enum modbusmq_query_mode_e
 {
     modbusmq_query_mode_min       = 0,
@@ -128,13 +181,35 @@ typedef enum modbusmq_query_mode_e
 typedef struct modbusmq_channel_t
 {
     int                     offset;
-    int                     length; // length of value, internally computed
+                                   // Wire bytes the channel occupies. Derived
+                                   // from the format for every fixed-size one;
+                                   // a text format that spans as much register
+                                   // as the device feels like — ascii, bcd,
+                                   // version_regs — has no size of its own and
+                                   // takes it from channel.length /
+                                   // channel.nregisters instead, which is what
+                                   // has_length records.
+    int                     length;
+    uint8_t                 has_length;
     int                     format;
     int                     add;
     int                     mod;    // -10 = value/10, 100 = value * 100
     int                     mul;    // if mul != 0, value*mul
     char                   *topic;
     float                   value; // used for debug to hold a value
+                                   // The same default, unparsed. A text
+                                   // channel's default cannot survive a
+                                   // strtod(), so modbusmq_server serves this
+                                   // instead for those formats.
+    char                   *value_text;
+
+                                   // Time formats only: strftime pattern for
+                                   // the decoded timestamp, and whether to
+                                   // render it in local time. Unset means
+                                   // MODBUSMQ_TIMEFMT_DEFAULT (or the date-only
+                                   // variant) and UTC.
+    char                   *timefmt;
+    uint8_t                 localtime;
 
                                    // per-channel publish options. unset means
                                    // take mqtt.retain / mqtt.qos
@@ -182,8 +257,14 @@ typedef struct modbusmq_channel_t
                                    // float. last_value still backs min_change /
                                    // min_change_rel, which are magnitude checks
                                    // rather than text comparisons.
+                                   // last_text must hold the longest thing a
+                                   // channel can publish, not just a number:
+                                   // an ASCII serial number is routinely 32
+                                   // characters, and truncating it here would
+                                   // make two different devices compare equal
+                                   // and suppress the publish that says so.
     float                   last_value;
-    char                    last_text[32];
+    char                    last_text[MODBUSMQ_TEXT_MAX];
     millitime_t             last_publish_ms;
     uint8_t                 published;
 } modbusmq_channel_t;
@@ -357,6 +438,8 @@ extern void                modbusmq_config_reset_publish_state(modbusmq_config_t
 extern int modbusmq_config_input_type(const char *value);
     // format name -> enum modbusmq_data_format_e, _unknown (and logged) when unrecognised
 extern int modbusmq_config_dataformat(const char *value);
+    // ...and back, for messages: enum -> the name a config file spells it with
+extern const char *modbusmq_config_dataformat_name(int format);
 extern int modbusmq_config_write_function(const char *value);
 
 //

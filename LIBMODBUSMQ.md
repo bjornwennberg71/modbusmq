@@ -406,6 +406,60 @@ On the way out, `modbusmq_write_encode()` is the exact inverse of
 encodes the result into up to two registers in wire order, rejecting values that
 do not fit the format rather than truncating them.
 
+### Text channels
+
+A serial number, a firmware version and a timestamp cannot go through any of
+the above, because `modbusmq_read_channel()` returns a `float` and a `float`
+has 24 bits of mantissa. An eight-digit serial number exceeds 2^24 and loses
+its low digits; an epoch-seconds timestamp is around 2^31 and quantises to
+steps of about two minutes. So those formats have a reader of their own:
+
+```c
+int modbusmq_format_is_text(int format);
+int modbusmq_read_channel_text(modbusmq_context_t *context, modbusmq_msg_t *msg,
+                               const modbusmq_input_t *input, const modbusmq_channel_t *channel,
+                               char *buf, size_t len);   // chars written, < 0 on error
+```
+
+Branch once on the predicate and the rest of the path is unchanged:
+
+```c
+char value[MODBUSMQ_TEXT_MAX];
+float f = 0;
+
+if (modbusmq_format_is_text(channel->format))
+{
+    if (modbusmq_read_channel_text(context, msg, input, channel, value, sizeof(value)) < 0)
+    {
+        continue;  // skipped, not published: a wrong serial number looks like a right one
+    }
+}
+else
+{
+    f = modbusmq_read_channel(context, msg, input, channel);
+    modbusmq_channel_format_value(input, channel, f, value, sizeof(value));
+}
+
+if (modbusmq_channel_publish_decide(channel, f, value, millitime()) == 1)
+{
+    publish(channel->topic, value);
+}
+```
+
+`modbusmq_channel_publish_decide()` already judges "unchanged" on the printed
+text, so `on_change`, `min_interval` and `max_interval` work on a serial number
+exactly as they do on a voltage. `min_change` and `min_change_rel` are
+magnitude gates and do not apply; the config parser rejects them on a text
+channel, and the runtime skips them regardless.
+
+`modbusmq_format_is_time()` and `modbusmq_format_is_epoch()` narrow the set
+further: the first is what `channel.timefmt` applies to, the second is the
+subset carrying a real instant and therefore the only one `channel.timezone`
+can convert. `modbusmq_encode_text()` is the inverse, and exists so
+`modbusmq_server` can serve a textual default the way a real device would.
+
+See `config/CONFIG.md` for the format names and what each one decodes to.
+
 ---
 
 ## 9. RTU tuning

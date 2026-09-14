@@ -130,7 +130,7 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         *modbusmq_config = modbusmq_config_get();
 #endif
     char
-        value[100];
+        value[MODBUSMQ_TEXT_MAX];
 
     for(int c = 0; c < input->channel_max; ++c)
     {
@@ -147,16 +147,36 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
         }
 
         float
-            f = modbusmq_read_channel(context, msg, input, channel);
+            f = 0;
 
         //
-        // min_change/min_interval/max_interval decide whether this reading is
-        // worth sending at all — a status word flooding the broker unchanged
-        // every poll helps nobody. The formatted value is still logged either
-        // way, at debug level, so -v shows what a suppressed channel would
-        // have published.
+        // A serial number, a firmware version or a timestamp decodes straight
+        // to characters — see modbusmq_read_channel_text(), which exists
+        // because none of the three survives the trip through a float. It
+        // fails rather than guessing, and a channel it could not decode is
+        // skipped for the same reason an out-of-range one is: a wrong serial
+        // number is indistinguishable from a right one.
         //
-        modbusmq_channel_format_value(input, channel, f, value, sizeof(value));
+        if (modbusmq_format_is_text(channel->format))
+        {
+            if (modbusmq_read_channel_text(context, msg, input, channel, value, sizeof(value)) < 0)
+            {
+                continue;
+            }
+        }
+        else
+        {
+            f = modbusmq_read_channel(context, msg, input, channel);
+
+            //
+            // min_change/min_interval/max_interval decide whether this reading
+            // is worth sending at all — a status word flooding the broker
+            // unchanged every poll helps nobody. The formatted value is still
+            // logged either way, at debug level, so -v shows what a suppressed
+            // channel would have published.
+            //
+            modbusmq_channel_format_value(input, channel, f, value, sizeof(value));
+        }
 
         if (modbusmq_channel_publish_decide(channel, f, value, millitime()) == 0)
         {

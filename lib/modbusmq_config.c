@@ -200,6 +200,54 @@ modbusmq_config_dataformat(const char *value)
     {
         return modbusmq_data_format_float_cdab;
     }
+    //
+    // The text formats. These have no unsigned/signed history to carry, so
+    // modbusmq_config_apply_format_version() leaves them alone.
+    //
+    else if (strcmp(value, MODBUSMQ_FORMAT_ASCII_AB) == 0)
+    {
+        return modbusmq_data_format_ascii_ab;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_ASCII_BA) == 0)
+    {
+        return modbusmq_data_format_ascii_ba;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_BCD_AB) == 0)
+    {
+        return modbusmq_data_format_bcd_ab;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_BCD_BA) == 0)
+    {
+        return modbusmq_data_format_bcd_ba;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_VERSION_AB) == 0)
+    {
+        return modbusmq_data_format_version_ab;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_VERSION_ABCD) == 0)
+    {
+        return modbusmq_data_format_version_abcd;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_VERSION_REGS) == 0)
+    {
+        return modbusmq_data_format_version_regs;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_DATE_YMD_ABCD) == 0)
+    {
+        return modbusmq_data_format_date_ymd_abcd;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_DATETIME_REGS) == 0)
+    {
+        return modbusmq_data_format_datetime_regs;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_EPOCH32_ABCD) == 0)
+    {
+        return modbusmq_data_format_epoch32_abcd;
+    }
+    else if (strcmp(value, MODBUSMQ_FORMAT_EPOCH32_BADC) == 0)
+    {
+        return modbusmq_data_format_epoch32_badc;
+    }
 
     //
     // No assert here. A typo in a config file is the operator's mistake to
@@ -208,6 +256,49 @@ modbusmq_config_dataformat(const char *value)
     //
     modbusmq_logf(LOG_ERROR, "Unsupported format: %s\n", value);
     return modbusmq_data_format_unknown;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// The name a format goes by in a config file.
+//
+// Only for messages. An operator who wrote "ascii_ab" needs to be told about
+// ascii_ab, not about format 17 — and the int_*/uint_* pairs share an enum
+// value each, so this reports the config.version 2.0 spelling of them.
+//
+const char *
+modbusmq_config_dataformat_name(int format)
+{
+    switch (format)
+    {
+    case modbusmq_data_format_int8:          return MODBUSMQ_FORMAT_A;
+    case modbusmq_data_format_int16_ab:      return MODBUSMQ_FORMAT_AB;
+    case modbusmq_data_format_int16_ba:      return MODBUSMQ_FORMAT_BA;
+    case modbusmq_data_format_abcd:          return MODBUSMQ_FORMAT_ABCD;
+    case modbusmq_data_format_badc:          return MODBUSMQ_FORMAT_BADC;
+    case modbusmq_data_format_a:             return MODBUSMQ_FORMAT_UA;
+    case modbusmq_data_format_ab:            return MODBUSMQ_FORMAT_UAB;
+    case modbusmq_data_format_ba:            return MODBUSMQ_FORMAT_UBA;
+    case modbusmq_data_format_uint32_abcd:   return MODBUSMQ_FORMAT_UABCD;
+    case modbusmq_data_format_uint32_badc:   return MODBUSMQ_FORMAT_UBADC;
+    case modbusmq_data_format_float_ba:      return MODBUSMQ_FORMAT_FLOAT_BA;
+    case modbusmq_data_format_float_abcd:    return MODBUSMQ_FORMAT_FLOAT_ABCD;
+    case modbusmq_data_format_float_badc:    return MODBUSMQ_FORMAT_FLOAT_BADC;
+    case modbusmq_data_format_float_dcba:    return MODBUSMQ_FORMAT_FLOAT_DCBA;
+    case modbusmq_data_format_float_cdab:    return MODBUSMQ_FORMAT_FLOAT_CDAB;
+    case modbusmq_data_format_ascii_ab:      return MODBUSMQ_FORMAT_ASCII_AB;
+    case modbusmq_data_format_ascii_ba:      return MODBUSMQ_FORMAT_ASCII_BA;
+    case modbusmq_data_format_bcd_ab:        return MODBUSMQ_FORMAT_BCD_AB;
+    case modbusmq_data_format_bcd_ba:        return MODBUSMQ_FORMAT_BCD_BA;
+    case modbusmq_data_format_version_ab:    return MODBUSMQ_FORMAT_VERSION_AB;
+    case modbusmq_data_format_version_abcd:  return MODBUSMQ_FORMAT_VERSION_ABCD;
+    case modbusmq_data_format_version_regs:  return MODBUSMQ_FORMAT_VERSION_REGS;
+    case modbusmq_data_format_date_ymd_abcd: return MODBUSMQ_FORMAT_DATE_YMD_ABCD;
+    case modbusmq_data_format_datetime_regs: return MODBUSMQ_FORMAT_DATETIME_REGS;
+    case modbusmq_data_format_epoch32_abcd:  return MODBUSMQ_FORMAT_EPOCH32_ABCD;
+    case modbusmq_data_format_epoch32_badc:  return MODBUSMQ_FORMAT_EPOCH32_BADC;
+    default:                                 return "?";
+    }
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -916,7 +1007,59 @@ modbusmq_config_parse(const char *filename)
                         free(line);
                         return -1;
                     }
-                    channel->length = modbusmq_format_size(channel->format);
+                    //
+                    // A variable-width text format reports size 0 and takes
+                    // its length from channel.length / channel.nregisters. An
+                    // explicit length already read stands, since the keys may
+                    // appear in either order; the validator afterwards is what
+                    // catches a length that contradicts a fixed-size format.
+                    //
+                    if (!channel->has_length)
+                    {
+                        channel->length = modbusmq_format_size(channel->format);
+                    }
+                }
+                else if (strcmp(channel_key, "length") == 0 ||
+                         strcmp(channel_key, "nregisters") == 0)
+                {
+                    int
+                        n = (int)strtol(value, NULL, 0);
+                    int
+                        bytes = (channel_key[0] == 'n') ? n * 2 : n;
+
+                    if (n <= 0 || bytes > MODBUSMQ_TEXT_BYTES_MAX)
+                    {
+                        fprintf(stderr, "%d: %s=%s: %s must be between 1 and %d bytes\n",
+                                line_num, key, value, channel_key, MODBUSMQ_TEXT_BYTES_MAX);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+
+                    channel->length     = bytes;
+                    channel->has_length = 1;
+                }
+                else if (strcmp(channel_key, "timefmt") == 0)
+                {
+                    config_set_string(&channel->timefmt, value);
+                }
+                else if (strcmp(channel_key, "timezone") == 0)
+                {
+                    if (strcmp(value, "utc") == 0)
+                    {
+                        channel->localtime = 0;
+                    }
+                    else if (strcmp(value, "local") == 0)
+                    {
+                        channel->localtime = 1;
+                    }
+                    else
+                    {
+                        fprintf(stderr, "%d: %s=%s: timezone must be utc or local\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
                 }
                 else if (strcmp(channel_key, "mod") == 0)
                 {
@@ -936,7 +1079,14 @@ modbusmq_config_parse(const char *filename)
                 }
                 else if (strcmp(channel_key, "value") == 0)
                 {
+                    //
+                    // Kept both ways. A text channel's default cannot survive
+                    // strtod() — "PIX-00123" becomes 0 — and the format that
+                    // decides which one matters is free to appear later in the
+                    // file, so neither reading can be skipped here.
+                    //
                     channel->value = strtod(value, NULL);
+                    config_set_string(&channel->value_text, value);
                 }
                 else if (strcmp(channel_key, "retain") == 0)
                 {
@@ -1170,6 +1320,20 @@ modbusmq_config_parse(const char *filename)
                     free(line);
                     return -1;
                 }
+                //
+                // Text formats are read-only. Writing a serial number or a
+                // clock back to a device is a different job with different
+                // failure modes, and the write path scales a number — there is
+                // nothing here to scale. Say so plainly rather than letting a
+                // zero length surface as an unrelated complaint further down.
+                //
+                if (modbusmq_format_is_text(write->format))
+                {
+                    fprintf(stderr, "%d: %s=%s: text formats can be read but not written\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
                 write->length = modbusmq_format_size(write->format);
             }
             else if (strcmp(write_key, "add") == 0)
@@ -1366,6 +1530,115 @@ modbusmq_config_parse(const char *filename)
             if (channel->format == modbusmq_data_format_unknown)
             {
                 fprintf(stderr, "input.%d.channel.%d: format is required\n", i+1, c+1);
+                return -1;
+            }
+
+            int
+                fixed = modbusmq_format_size(channel->format);
+
+            if (!modbusmq_format_is_text(channel->format))
+            {
+                //
+                // The text-only keys on a numeric channel are always a
+                // misunderstanding, and a silently ignored key is a bug report
+                // six months later.
+                //
+                if (channel->has_length)
+                {
+                    fprintf(stderr, "input.%d.channel.%d: length/nregisters applies to a text format only, %s is %d bytes\n",
+                            i+1, c+1, modbusmq_config_dataformat_name(channel->format), fixed);
+                    return -1;
+                }
+                if (channel->timefmt || channel->localtime)
+                {
+                    fprintf(stderr, "input.%d.channel.%d: timefmt/timezone applies to a time format only\n", i+1, c+1);
+                    return -1;
+                }
+                continue;
+            }
+
+            //
+            // A variable-width format has no size of its own — the device
+            // decides how many registers the serial number spans, and only the
+            // config knows. Defaulting it would read whatever length happened
+            // to be plausible and publish the result as fact.
+            //
+            if (fixed == 0)
+            {
+                if (!channel->has_length)
+                {
+                    fprintf(stderr, "input.%d.channel.%d: %s needs length (bytes) or nregisters\n",
+                            i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                    return -1;
+                }
+            }
+            else if (channel->has_length && channel->length != fixed)
+            {
+                fprintf(stderr, "input.%d.channel.%d: %s is %d bytes, not %d\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format), fixed, channel->length);
+                return -1;
+            }
+
+            if (channel->format == modbusmq_data_format_version_regs && (channel->length % 2) != 0)
+            {
+                fprintf(stderr, "input.%d.channel.%d: %s reads whole registers, so length must be even (or use nregisters)\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                return -1;
+            }
+
+            //
+            // Scaling has no meaning on a string. add survives on an epoch
+            // format alone, where it is the shift from the device's epoch onto
+            // the Unix one.
+            //
+            if (channel->mod != 0 || channel->mul != 0)
+            {
+                fprintf(stderr, "input.%d.channel.%d: mod/mul does not apply to %s, there is no number to scale\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                return -1;
+            }
+            if (channel->add != 0 && !modbusmq_format_is_epoch(channel->format))
+            {
+                fprintf(stderr, "input.%d.channel.%d: add applies to an epoch format only (as the epoch shift), not %s\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                return -1;
+            }
+            if (channel->has_decimals)
+            {
+                fprintf(stderr, "input.%d.channel.%d: decimals does not apply to %s\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                return -1;
+            }
+
+            //
+            // Checked on has_*, not the value: a config-wide publish.min_change
+            // is a default for the numeric channels and must not turn a text
+            // channel into a parse error. Only a channel that asked for it
+            // itself is told the key means nothing here.
+            //
+            if (channel->has_min_change || channel->has_min_change_rel)
+            {
+                fprintf(stderr, "input.%d.channel.%d: min_change/min_change_rel needs a magnitude, which %s has none of -- use on_change\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                return -1;
+            }
+
+            if ((channel->timefmt || channel->localtime) && !modbusmq_format_is_time(channel->format))
+            {
+                fprintf(stderr, "input.%d.channel.%d: timefmt/timezone applies to a time format only, not %s\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                return -1;
+            }
+
+            //
+            // A date the device reported as plain digits carries no timezone,
+            // so there is nothing to convert it from. Rendering it "in local
+            // time" would shift it by an offset nobody supplied.
+            //
+            if (channel->localtime && !modbusmq_format_is_epoch(channel->format))
+            {
+                fprintf(stderr, "input.%d.channel.%d: timezone applies to an epoch format only -- %s carries no timezone to convert from\n",
+                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
         }

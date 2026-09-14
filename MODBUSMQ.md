@@ -140,6 +140,28 @@ publishes as a whole number, or with the decimals its divisor implies, so the
 temperature above goes out as `21.5` and a status word as `3`. A float format
 publishes with three decimals. Set `decimals` on the channel to override.
 
+**Text channels.** A serial number, a firmware version and a timestamp are not
+numbers to scale, and they do not survive being treated as one — every value
+above travels as a `float`, which loses the low digits of an eight-digit serial
+and rounds an epoch timestamp to the nearest couple of minutes. The `ascii_*`,
+`bcd_*`, `version_*`, `date_*`, `datetime_*` and `epoch32_*` formats decode
+straight to text instead:
+
+```
+input.1.channel.1.offset     = 0
+input.1.channel.1.format     = ascii_ab
+input.1.channel.1.nregisters = 16          # required: only the datasheet knows
+input.1.channel.1.topic      = battery/serial
+input.1.channel.1.on_change  = 1
+input.1.channel.1.retain     = 1
+```
+
+`on_change`, `min_interval` and `max_interval` work on these as they do on a
+voltage; `mod`, `mul`, `decimals`, `min_change` and `min_change_rel` do not
+apply and are rejected at parse time rather than ignored. They are read-only —
+a `write.N` entry naming one is refused. See `config/CONFIG.md` for the full
+list and what each format decodes to.
+
 ---
 
 ## 6. Check it without the device

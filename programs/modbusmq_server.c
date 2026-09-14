@@ -666,17 +666,50 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
                     continue; // outside what was asked for
                 }
 
+                //
+                // A text channel's default went through strtod() as well as
+                // being kept verbatim, and only the verbatim copy means
+                // anything: "PIX-00123" reads back as 0. Encode from that
+                // instead, so the virtual server can serve a serial number,
+                // a firmware version or a timestamp the way a real device does.
+                //
                 int
+                    encoded;
+
+                if (modbusmq_format_is_text(channel->format))
+                {
+                    if (!channel->value_text)
+                    {
+                        continue; // nothing configured to serve
+                    }
+
+                    encoded = modbusmq_encode_text(channel, channel->value_text,
+                                                   &res->buf[9 + pos], (size_t)(nbytes - pos));
+                }
+                else
+                {
                     encoded = modbusmq_encode_value(channel->format, channel->value, &res->buf[9 + pos]);
+                }
 
                 if (encoded <= 0)
                 {
-                    printf("default_value: unsupported format %d for channel %s\n", (int)channel->format, channel->topic);
+                    printf("default_value: channel %s: %s default does not fit format %s\n",
+                           channel->topic,
+                           modbusmq_format_is_text(channel->format) ? "text" : "numeric",
+                           modbusmq_config_dataformat_name(channel->format));
                     continue;
                 }
 
-                printf("default_value: %s = %.2f (reg 0x%04X)\n",
-                       channel->topic, channel->value, address_start + pos / 2);
+                if (modbusmq_format_is_text(channel->format))
+                {
+                    printf("default_value: %s = %s (reg 0x%04X)\n",
+                           channel->topic, channel->value_text, address_start + pos / 2);
+                }
+                else
+                {
+                    printf("default_value: %s = %.2f (reg 0x%04X)\n",
+                           channel->topic, channel->value, address_start + pos / 2);
+                }
             }
         }
 

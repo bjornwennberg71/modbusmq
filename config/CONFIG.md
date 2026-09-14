@@ -214,6 +214,12 @@ input.N.channel.M.value  = 4800     # default value (used by modbusmq_server)
 input.N.channel.M.retain = 0        # override mqtt.retain for this channel
 input.N.channel.M.qos    = 1        # override mqtt.qos for this channel
 
+# Text formats only — see "Text formats" below.
+input.N.channel.M.length     = 32                  # bytes the field spans
+input.N.channel.M.nregisters = 16                  # ...or the same in registers
+input.N.channel.M.timefmt    = %Y-%m-%dT%H:%M:%SZ  # strftime pattern, time formats only
+input.N.channel.M.timezone   = utc                 # utc (default) or local, epoch formats only
+
 # Formatting and publish rate limiting — see the section below. Each of these
 # overrides the input-level (and, failing that, the config-wide) default.
 input.N.channel.M.decimals       = 2     # decimal places when printing/publishing
@@ -224,7 +230,7 @@ input.N.channel.M.min_interval   = 5000  # never publish more often than this, i
 input.N.channel.M.max_interval   = 60000 # heartbeat: publish anyway after this long, in ms
 ```
 
-Only `offset`, `format`, and `topic` are required. `add`, `mod`, `mul`, and `value` are optional.
+Only `offset`, `format`, and `topic` are required — plus `length` or `nregisters` for a variable-width text format. `add`, `mod`, `mul`, and `value` are optional.
 
 ### Data formats
 
@@ -272,6 +278,99 @@ Below 2.0, or with no `config.version` at all, `int_a`/`int_ab`/`int_ba` keep th
 **To migrate a config**: set `config.version = 2.0`, then go through each `int_ab` channel and decide. Anything that genuinely cannot go negative becomes `uint_ab`; anything that can stays `int_ab` and now decodes correctly. It is worth doing channel by channel rather than with a search and replace — the channels where the answer is "signed" are exactly the ones that were quietly broken before.
 
 The 32-bit formats did not change behaviour. `int_abcd` was already signed, though only by an implementation-defined conversion rather than on purpose; it is now signed deliberately, and `uint_abcd` exists for the other case.
+
+### Text formats: serial numbers, versions and timestamps
+
+A serial number, a firmware version and a timestamp are not numbers you can
+scale, and they do not survive being treated as one. Every value above travels
+as a `float`, which has 24 bits of mantissa: an eight-digit serial number is
+larger than 2^24 and loses its low digits outright, and an epoch-seconds
+timestamp is around 2^31 and quantises to steps of roughly two minutes. So
+these formats decode from the wire bytes straight to text and never touch a
+float on the way.
+
+| Format          | Size        | Publishes                       |
+|-----------------|-------------|---------------------------------|
+| `ascii_ab`      | `length`    | two characters per register, high byte first |
+| `ascii_ba`      | `length`    | the same, with each register's two bytes swapped |
+| `bcd_ab`        | `length`    | packed BCD, two digits per byte, high nibble first |
+| `bcd_ba`        | `length`    | the same, byte-swapped per register |
+| `version_ab`    | 2 bytes     | one byte per field — `0x0207` → `2.7` |
+| `version_abcd`  | 4 bytes     | four fields — `0x01020304` → `1.2.3.4` |
+| `version_regs`  | `length`    | one **register** per field, so a field may exceed 255 |
+| `date_ymd_abcd` | 4 bytes     | `uint16` year, then a byte each of month and day → `2026-09-14` |
+| `datetime_regs` | 12 bytes    | six registers: year, month, day, hour, minute, second |
+| `epoch32_abcd`  | 4 bytes     | `uint32` seconds since 1970-01-01 → ISO 8601 |
+| `epoch32_badc`  | 4 bytes     | the same, with the two registers swapped |
+
+**`length` or `nregisters` is required** for `ascii_*`, `bcd_*` and
+`version_regs`. Those have no width of their own — how many registers the
+serial number spans is something only the device's datasheet knows — and
+guessing would read whatever happened to be next to it and publish the result
+as fact. The other formats have a fixed size and reject a `length` that
+disagrees with it. The maximum is 64 bytes.
+
+```
+# a 16-register SunSpec-style serial number
+input.1.channel.1.offset     = 0
+input.1.channel.1.format     = ascii_ab
+input.1.channel.1.nregisters = 16
+input.1.channel.1.topic      = battery/serial
+input.1.channel.1.on_change  = 1
+input.1.channel.1.retain     = 1
+```
+
+**ASCII padding**: a NUL byte is treated as padding, not as a terminator.
+Devices pad the tail of one field and occasionally the head of the next, and a
+decoder that stopped at the first NUL would drop everything behind it. Leading
+and trailing spaces are trimmed; an interior space is kept, because `PIXII BOX
+3` is a model name and not two of them. Any byte outside printable ASCII
+becomes `?` rather than being passed through — a garbled read must not be able
+to put control characters into an MQTT payload.
+
+**BCD** keeps its leading zeros: on a serial number they are part of the
+number. A nibble above 9 is not a digit, and a field full of them is almost
+always a config pointing at the wrong offset, so the channel is skipped and
+logged rather than published as `1A:3F`.
+
+**Timestamps** print as ISO 8601 UTC by default. `channel.timefmt` takes any
+`strftime` pattern, and `channel.timezone = local` renders in the host's local
+time — but only for the `epoch32_*` formats, which carry a real instant.
+`date_ymd_abcd` and `datetime_regs` are wall-clock digits the device reported
+with no timezone attached, so they are printed exactly as read, without the
+trailing `Z` that would be claiming something nobody told us.
+
+A device counting from an epoch other than 1970 is handled by `add`, which is
+already defined as "added to the raw value before scaling":
+
+```
+# a device whose clock counts from 2000-01-01
+input.1.channel.9.offset = 20
+input.1.channel.9.format = epoch32_abcd
+input.1.channel.9.add    = 946684800
+input.1.channel.9.topic  = device/last_seen
+```
+
+**What does not apply.** `mod`, `mul` and `decimals` are rejected at parse time
+rather than ignored — there is no number to scale or round. `add` is accepted
+only on an `epoch32_*` channel, as the epoch shift above. `min_change` and
+`min_change_rel` are magnitude gates and are rejected too; use `on_change`,
+which compares the published text and is what you wanted anyway. `on_change`,
+`min_interval` and `max_interval` all work normally.
+
+A serial number typically wants `on_change = 1` with `retain = 1`, and a
+`max_interval` heartbeat if consumers read publish cadence as liveness.
+
+**Text formats are read-only.** A `write.N.format` naming one is rejected:
+writing a string or a clock back to a device is a different job, with different
+failure modes, and is not offered.
+
+**Defaults for `modbusmq_server`**: `channel.value` holds the wire content in
+its natural spelling — the string itself for `ascii_*`, the digits for `bcd_*`,
+`1.2.3` for a version, `2026-09-14` for a date, `2026-09-14T08:30:00` for a
+`datetime_regs`, and a plain second count for an `epoch32_*`. `add` is not
+undone when serving it, so a config that shifts the epoch on the way in wants
+the unshifted count here.
 
 ### Scaling
 

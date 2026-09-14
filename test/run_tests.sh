@@ -214,6 +214,87 @@ expect_exit "malformed -e is rejected" 255 "$BRIDGE" -c "$CONFIG" -e nonsense
 expect_output "modbusmq_server accepts -e" "key=value" "$SERVER" --help
 
 echo
+echo "config validation"
+
+#
+# Build a one-channel config with $body appended, and assert the bridge refuses
+# it with a message that says why.
+#
+# Whole configs rather than -e overrides: -e only replaces a key the file
+# already has, and every case below is a key a working config never contains.
+#
+bad_config()
+{
+    local what=$1 pattern=$2 body=$3
+    local f="$TMP/bad.config"
+
+    cat > "$f" <<EOF
+config.name      = bad
+config.version   = 2.0
+modbusmq.connect = tcp://localhost:$PORT
+
+input.max = 1
+input.1.slave       = 1
+input.1.type        = holding_register
+input.1.address     = 0x0200
+input.1.naddress    = 8
+input.1.interval    = 1000
+input.1.channel.max = 1
+input.1.channel.1.offset = 0
+input.1.channel.1.topic  = t/bad
+input.1.channel.1.format = uint_ab
+$body
+EOF
+
+    if timeout 5 "$BRIDGE" -c "$f" 2>&1 | grep -qE "$pattern"; then
+        ok "$what"
+    else
+        bad "$what (expected /$pattern/)"
+        timeout 5 "$BRIDGE" -c "$f" 2>&1 | sed 's/^/    /' | head -5
+    fi
+}
+
+# a variable-width text format has no size of its own
+bad_config "ascii without a length is rejected" "needs length" \
+    "input.1.channel.1.format = ascii_ab"
+
+# scaling has nothing to work on
+bad_config "mod on a text channel is rejected" "mod/mul does not apply" \
+    "input.1.channel.1.format = ascii_ab
+input.1.channel.1.nregisters = 4
+input.1.channel.1.mod = -10"
+
+# ...and the reverse: a length on a channel whose format already has one
+bad_config "length on a numeric channel is rejected" "applies to a text format only" \
+    "input.1.channel.1.nregisters = 4"
+
+# timefmt describes a timestamp, not a serial number
+bad_config "timefmt on a string channel is rejected" "time format only" \
+    "input.1.channel.1.format = ascii_ab
+input.1.channel.1.nregisters = 4
+input.1.channel.1.timefmt = %Y"
+
+# a field-per-register clock carries no timezone to convert from
+bad_config "timezone on a field datetime is rejected" "epoch format only" \
+    "input.1.channel.1.format = datetime_regs
+input.1.channel.1.timezone = local"
+
+# min_change is a magnitude gate and a string has no magnitude
+bad_config "min_change on a text channel is rejected" "min_change" \
+    "input.1.channel.1.format = ascii_ab
+input.1.channel.1.nregisters = 4
+input.1.channel.1.min_change = 0.5"
+
+# text formats are read-only
+bad_config "a text format in a write entry is rejected" "read but not written" \
+    "write.max = 1
+write.1.slave  = 1
+write.1.type   = holding_register
+write.1.address = 0x0300
+write.1.format = ascii_ab
+write.1.topic  = t/set"
+
+echo
 echo "--------------------------------"
 echo "passed: $PASS   failed: $FAIL"
 

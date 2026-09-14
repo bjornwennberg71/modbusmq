@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <time.h>
 
 #include <sys/ioctl.h>
 #include <netdb.h>
@@ -783,9 +784,15 @@ modbusmq_read_float_cdab(const uint8_t *data)
  *
  * @brief number of bytes a channel format occupies
  *
+ * Returns 0 for a format whose width the device decides rather than the
+ * format: an ASCII string, a run of BCD digits, a version with as many fields
+ * as the vendor felt like. Those take their length from channel.length /
+ * channel.nregisters, and a config that gives a text format neither is
+ * rejected at parse time rather than guessing here.
+ *
  * @param format: modbusmq_data_format_e value
  *
- * @return size in bytes
+ * @return size in bytes, 0 when the format is variable-width
  */
 int
 modbusmq_format_size(int format)
@@ -800,7 +807,19 @@ modbusmq_format_size(int format)
     case modbusmq_data_format_int16_ab:
     case modbusmq_data_format_int16_ba:
     case modbusmq_data_format_float_ba:
+    case modbusmq_data_format_version_ab:
         return 2;
+
+    case modbusmq_data_format_datetime_regs:
+        return 12; // six registers, one field each
+
+    case modbusmq_data_format_ascii_ab:
+    case modbusmq_data_format_ascii_ba:
+    case modbusmq_data_format_bcd_ab:
+    case modbusmq_data_format_bcd_ba:
+    case modbusmq_data_format_version_regs:
+        return 0; // variable: see channel.length
+
     default:
         return 4;
     }
@@ -878,8 +897,14 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
 
     int
         offset = modbusmq_channel_byte_offset(config, input, channel);
+    //
+    // channel->length is the authority, not the format: a text channel's width
+    // comes from the config, and asking the format for it would hand back 0 and
+    // wave a 32-byte serial number through a bounds check it should fail. The
+    // fallback keeps this honest for a channel built by hand rather than parsed.
+    //
     int
-        size   = modbusmq_format_size(channel->format);
+        size   = channel->length > 0 ? channel->length : modbusmq_format_size(channel->format);
 
     if (offset < 0 || nbytes < 0 || offset + size > nbytes)
     {
@@ -980,6 +1005,505 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
     }
     
     return f;
+}
+
+/**
+ *
+ * @brief is this format a string rather than a number?
+ *
+ * The one predicate the whole text path branches on. See the block comment on
+ * modbusmq_read_channel_text() in modbusmq.h for why these cannot simply be
+ * decoded into the float every other format uses.
+ *
+ * @param format: modbusmq_data_format_e value
+ *
+ * @return 1 for a text format, 0 otherwise
+ */
+int
+modbusmq_format_is_text(int format)
+{
+    switch (format)
+    {
+    case modbusmq_data_format_ascii_ab:
+    case modbusmq_data_format_ascii_ba:
+    case modbusmq_data_format_bcd_ab:
+    case modbusmq_data_format_bcd_ba:
+    case modbusmq_data_format_version_ab:
+    case modbusmq_data_format_version_abcd:
+    case modbusmq_data_format_version_regs:
+    case modbusmq_data_format_date_ymd_abcd:
+    case modbusmq_data_format_datetime_regs:
+    case modbusmq_data_format_epoch32_abcd:
+    case modbusmq_data_format_epoch32_badc:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/**
+ *
+ * @brief is this format a point in time?
+ *
+ * Narrower than modbusmq_format_is_text(): these are the formats channel.timefmt
+ * applies to, and the only ones where channel.add survives — on an epoch format
+ * it is the epoch shift, the 946684800 seconds that turn a device counting from
+ * 2000-01-01 into one counting from 1970-01-01.
+ *
+ * @param format: modbusmq_data_format_e value
+ *
+ * @return 1 for a time format, 0 otherwise
+ */
+int
+modbusmq_format_is_time(int format)
+{
+    switch (format)
+    {
+    case modbusmq_data_format_date_ymd_abcd:
+    case modbusmq_data_format_datetime_regs:
+    case modbusmq_data_format_epoch32_abcd:
+    case modbusmq_data_format_epoch32_badc:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/**
+ *
+ * @brief is this an instant on the clock, rather than a date the device wrote down?
+ *
+ * An epoch count is a real instant and can be rendered in whatever timezone the
+ * operator wants. A field-per-register date or datetime is wall-clock digits the
+ * device reported with no timezone attached — converting those would invent an
+ * offset nobody supplied, so they are printed exactly as read and channel.timezone
+ * does not apply to them.
+ *
+ * @param format: modbusmq_data_format_e value
+ *
+ * @return 1 for an epoch format, 0 otherwise
+ */
+int
+modbusmq_format_is_epoch(int format)
+{
+    return format == modbusmq_data_format_epoch32_abcd ||
+           format == modbusmq_data_format_epoch32_badc;
+}
+
+//
+// Byte i of a text field, in the order the format reads it.
+//
+// "ba" swaps the two bytes of every register, so byte i comes from i^1. A field
+// with an odd length has a last byte with no partner to swap with, which is why
+// the swapped index is range-checked rather than assumed.
+//
+static uint8_t
+modbusmq_text_byte(const uint8_t *data, int length, int i, int swap)
+{
+    int
+        j = swap ? (i ^ 1) : i;
+
+    return data[(j < length) ? j : i];
+}
+
+//
+// Strip the padding a device wrapped a string in.
+//
+// Leading and trailing spaces only — an interior space is part of the value
+// ("PIXII BOX 3"), and a NUL never reaches here because the decoder drops those
+// as it goes.
+//
+static int
+modbusmq_text_trim(char *buf, int n)
+{
+    int
+        start = 0;
+
+    while (start < n && buf[start] == ' ')
+    {
+        start++;
+    }
+
+    while (n > start && buf[n-1] == ' ')
+    {
+        n--;
+    }
+
+    if (start > 0)
+    {
+        memmove(buf, buf + start, n - start);
+        n -= start;
+    }
+
+    buf[n] = 0;
+
+    return n;
+}
+
+//
+// ASCII: two characters per register, high byte first unless swapped.
+//
+// A NUL is padding, not a terminator. Devices pad the tail of one field and
+// occasionally the head of the next, and a decoder that stopped at the first
+// NUL would drop everything behind it. Anything outside printable ASCII becomes
+// '?' rather than being passed through — a garbled read must not be able to put
+// control characters into an MQTT payload.
+//
+static int
+modbusmq_text_ascii(const uint8_t *data, int length, int swap, char *buf, size_t len)
+{
+    int
+        n = 0;
+
+    for(int i = 0; i < length; ++i)
+    {
+        uint8_t
+            c = modbusmq_text_byte(data, length, i, swap);
+
+        if (c == 0)
+        {
+            continue;
+        }
+
+        if ((size_t)n + 1 >= len)
+        {
+            return -1;
+        }
+
+        buf[n++] = (c < 0x20 || c > 0x7E) ? '?' : (char)c;
+    }
+
+    buf[n] = 0;
+
+    return modbusmq_text_trim(buf, n);
+}
+
+//
+// Packed BCD: two decimal digits per byte, high nibble first.
+//
+// Leading zeros are kept. On a serial number they are part of the number, and
+// the one place a BCD field is used is exactly where that matters.
+//
+// A nibble above 9 is not a digit, and a field full of them is a register that
+// is not BCD at all — usually a config pointing at the wrong offset. Report it
+// rather than publishing "1A:3F".
+//
+static int
+modbusmq_text_bcd(const uint8_t *data, int length, int swap, char *buf, size_t len)
+{
+    int
+        n = 0;
+
+    if ((size_t)(length * 2 + 1) > len)
+    {
+        return -1;
+    }
+
+    for(int i = 0; i < length; ++i)
+    {
+        uint8_t
+            c  = modbusmq_text_byte(data, length, i, swap);
+        uint8_t
+            hi = (c >> 4) & 0x0f;
+        uint8_t
+            lo = c & 0x0f;
+
+        if (hi > 9 || lo > 9)
+        {
+            return -1;
+        }
+
+        buf[n++] = '0' + hi;
+        buf[n++] = '0' + lo;
+    }
+
+    buf[n] = 0;
+
+    return n;
+}
+
+//
+// A version as fields joined by dots.
+//
+// stride is the width of one field: 1 for the byte-packed forms, 2 for
+// version_regs, where the vendor gave each component a register of its own.
+//
+static int
+modbusmq_text_version(const uint8_t *data, int length, int stride, char *buf, size_t len)
+{
+    int
+        n = 0;
+
+    for(int i = 0; i + stride <= length; i += stride)
+    {
+        unsigned
+            field = (stride == 2) ? (unsigned)((data[i] << 8) | data[i+1]) : data[i];
+        int
+            rc = snprintf(buf + n, len - (size_t)n, "%s%u", n ? "." : "", field);
+
+        if (rc < 0 || (size_t)(n + rc) >= len)
+        {
+            return -1;
+        }
+
+        n += rc;
+    }
+
+    return n;
+}
+
+//
+// The strftime pattern a time channel prints with.
+//
+// The default carries a trailing Z for an epoch format, because that really is
+// UTC unless the config asked for local time, and leaves it off for the
+// field-per-register forms, where the device supplied digits and no timezone to
+// go with them. Claiming UTC on those would be a guess dressed up as a fact.
+//
+static const char *
+modbusmq_channel_timefmt(const modbusmq_channel_t *channel)
+{
+    if (channel->timefmt)
+    {
+        return channel->timefmt;
+    }
+
+    if (channel->format == modbusmq_data_format_date_ymd_abcd)
+    {
+        return MODBUSMQ_DATEFMT_DEFAULT;
+    }
+
+    if (modbusmq_format_is_epoch(channel->format) && !channel->localtime)
+    {
+        return MODBUSMQ_TIMEFMT_DEFAULT;
+    }
+
+    return MODBUSMQ_TIMEFMT_NAIVE;
+}
+
+//
+// Reject a date the device cannot have meant before it reaches strftime, which
+// would happily render month 47. A register block read at the wrong offset
+// decodes to plausible-looking rubbish far more often than to an error, so this
+// is the only thing standing between a misconfigured offset and a published
+// timestamp somebody trusts.
+//
+static int
+modbusmq_tm_valid(const struct tm *tm)
+{
+    return tm->tm_year >= 70 && tm->tm_year <= 1099 &&   // 1970..2999
+           tm->tm_mon  >= 0  && tm->tm_mon  <= 11  &&
+           tm->tm_mday >= 1  && tm->tm_mday <= 31  &&
+           tm->tm_hour >= 0  && tm->tm_hour <= 23  &&
+           tm->tm_min  >= 0  && tm->tm_min  <= 59  &&
+           tm->tm_sec  >= 0  && tm->tm_sec  <= 60;       // 60: leap second
+}
+
+static int
+modbusmq_text_strftime(const modbusmq_channel_t *channel, const struct tm *tm, char *buf, size_t len)
+{
+    if (!modbusmq_tm_valid(tm))
+    {
+        return -1;
+    }
+
+    //
+    // strftime returns 0 both for a pattern that produced nothing and for one
+    // that did not fit. Neither is a timestamp worth publishing.
+    //
+    size_t
+        n = strftime(buf, len, modbusmq_channel_timefmt(channel), tm);
+
+    return (n == 0) ? -1 : (int)n;
+}
+
+//
+// An epoch count, rendered as a timestamp.
+//
+// channel->add lands here rather than in a key of its own: it is already
+// defined as "added to the raw value before scaling", and shifting a device
+// that counts from 2000-01-01 onto the Unix epoch is exactly that. The cast to
+// int64_t before the add is what keeps a 2106-era count from wrapping on the
+// way through.
+//
+static int
+modbusmq_text_epoch(const modbusmq_channel_t *channel, uint32_t raw, char *buf, size_t len)
+{
+    time_t
+        t = (time_t)((int64_t)raw + channel->add);
+    struct tm
+        tm;
+
+    if (channel->localtime)
+    {
+        if (!localtime_r(&t, &tm))
+        {
+            return -1;
+        }
+    }
+    else if (!gmtime_r(&t, &tm))
+    {
+        return -1;
+    }
+
+    return modbusmq_text_strftime(channel, &tm, buf, len);
+}
+
+/**
+ *
+ * @brief decode a text channel out of a response, straight to characters
+ *
+ * The string counterpart of modbusmq_read_channel(), and deliberately not a
+ * branch inside it: that one returns a float, and the whole reason these
+ * formats exist is that a float cannot hold them.
+ *
+ * A channel that cannot be decoded returns < 0 and is skipped by the caller
+ * rather than published. Half a serial number, or a timestamp from a register
+ * block read at the wrong offset, is worse than no message at all — a consumer
+ * has no way to tell either of them from the real thing.
+ *
+ * @param context: allocated context
+ * @param msg    : modbusmq message holding the response
+ * @param input  : input definition
+ * @param channel: channel definition
+ * @param buf    : destination, MODBUSMQ_TEXT_MAX bytes
+ * @param len    : size of buf
+ *
+ * @return characters written, < 0 (and logged) when the channel cannot be decoded
+ */
+int
+modbusmq_read_channel_text(modbusmq_context_t *context, modbusmq_msg_t *msg, const modbusmq_input_t *input, const modbusmq_channel_t *channel, char *buf, size_t len)
+{
+    if (!context || !msg || !input || !channel || !buf || len == 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    buf[0] = 0;
+
+    if (!modbusmq_format_is_text(channel->format))
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    //
+    // A bit input has no bytes to make characters out of. The config validator
+    // refuses this combination, so reaching it means a caller built the channel
+    // by hand.
+    //
+    if (MODBUSMQ_TYPE_IS_BIT(input->type))
+    {
+        modbusmq_logf(LOG_ERROR, "%s channel %s: a text format cannot read a coil or discrete input. action: skip channel\n",
+                      modbusmq_msg_tag(context, msg),
+                      channel->topic ? channel->topic : "?");
+        return -1;
+    }
+
+    if (modbusmq_channel_in_range(context, msg, input, channel) != 0)
+    {
+        return -1;
+    }
+
+    modbusmq_config_t
+        *config = modbusmq_config_get();
+    uint8_t
+        *data   = modbusmq_frame_data(context, &msg->frame[1]) + modbusmq_channel_byte_offset(config, input, channel);
+    int
+        length  = channel->length;
+    int
+        rc      = -1;
+
+    switch (channel->format)
+    {
+    case modbusmq_data_format_ascii_ab:
+        rc = modbusmq_text_ascii(data, length, 0, buf, len);
+        break;
+    case modbusmq_data_format_ascii_ba:
+        rc = modbusmq_text_ascii(data, length, 1, buf, len);
+        break;
+    case modbusmq_data_format_bcd_ab:
+        rc = modbusmq_text_bcd(data, length, 0, buf, len);
+        break;
+    case modbusmq_data_format_bcd_ba:
+        rc = modbusmq_text_bcd(data, length, 1, buf, len);
+        break;
+    case modbusmq_data_format_version_ab:
+    case modbusmq_data_format_version_abcd:
+        rc = modbusmq_text_version(data, length, 1, buf, len);
+        break;
+    case modbusmq_data_format_version_regs:
+        rc = modbusmq_text_version(data, length, 2, buf, len);
+        break;
+
+    case modbusmq_data_format_date_ymd_abcd:
+    {
+        //
+        // One 32-bit word: a uint16 year, then a byte each of month and day.
+        //
+        struct tm
+            tm = { 0 };
+
+        tm.tm_year = ((data[0] << 8) | data[1]) - 1900;
+        tm.tm_mon  = data[2] - 1;
+        tm.tm_mday = data[3];
+
+        rc = modbusmq_text_strftime(channel, &tm, buf, len);
+        break;
+    }
+
+    case modbusmq_data_format_datetime_regs:
+    {
+        //
+        // Six registers, one field each, in the order a human writes them.
+        //
+        int
+            field[6];
+
+        for(int i = 0; i < 6; ++i)
+        {
+            field[i] = (data[i*2] << 8) | data[i*2 + 1];
+        }
+
+        struct tm
+            tm = { 0 };
+
+        tm.tm_year = field[0] - 1900;
+        tm.tm_mon  = field[1] - 1;
+        tm.tm_mday = field[2];
+        tm.tm_hour = field[3];
+        tm.tm_min  = field[4];
+        tm.tm_sec  = field[5];
+
+        rc = modbusmq_text_strftime(channel, &tm, buf, len);
+        break;
+    }
+
+    case modbusmq_data_format_epoch32_abcd:
+        rc = modbusmq_text_epoch(channel, (uint32_t)modbusmq_read_int32_abcd(data), buf, len);
+        break;
+    case modbusmq_data_format_epoch32_badc:
+        rc = modbusmq_text_epoch(channel, (uint32_t)modbusmq_read_int32_badc(data), buf, len);
+        break;
+
+    default:
+        modbusmq_logf(LOG_ERROR, "channel %s: unhandled text format %d. action: skip channel\n",
+                      channel->topic ? channel->topic : "?", (int)channel->format);
+        return -1;
+    }
+
+    if (rc < 0)
+    {
+        buf[0] = 0;
+        modbusmq_logf(LOG_ERROR, "%s channel %s: the %d bytes at offset %d are not valid for its format. action: skip channel\n",
+                      modbusmq_msg_tag(context, msg),
+                      channel->topic ? channel->topic : "?",
+                      length, channel->offset);
+        return -1;
+    }
+
+    return rc;
 }
 
 /**
@@ -1199,14 +1723,26 @@ modbusmq_channel_publish_decide(modbusmq_channel_t *channel, float value, const 
         return 0;
     }
 
-    float
-        ref = MODBUSMQ_MAX(fabsf(channel->last_value), fabsf(value));
-    float
-        threshold = MODBUSMQ_MAX(channel->min_change, channel->min_change_rel * MODBUSMQ_MAX(1.0f, ref));
-
-    if (threshold > 0 && fabsf(value - channel->last_value) < threshold)
+    //
+    // min_change and min_change_rel are magnitude gates, and a serial number
+    // has no magnitude — the strcmp above is the entire comparison a text
+    // channel gets. Applying the threshold anyway would measure the distance
+    // between two values that are both permanently 0 and suppress every
+    // publish after the first. The config validator rejects these keys on a
+    // text channel, so this guard is the runtime half of a rule stated twice
+    // on purpose.
+    //
+    if (!modbusmq_format_is_text(channel->format))
     {
-        return 0;
+        float
+            ref = MODBUSMQ_MAX(fabsf(channel->last_value), fabsf(value));
+        float
+            threshold = MODBUSMQ_MAX(channel->min_change, channel->min_change_rel * MODBUSMQ_MAX(1.0f, ref));
+
+        if (threshold > 0 && fabsf(value - channel->last_value) < threshold)
+        {
+            return 0;
+        }
     }
 
     modbusmq_channel_publish_record(channel, value, text, now_ms);
@@ -1320,6 +1856,263 @@ modbusmq_encode_value(int format, double value, uint8_t *out)
     }
 
     return -1;
+}
+
+//
+// The write-side counterpart of modbusmq_text_byte(): place byte i of a text
+// field where the format says it belongs.
+//
+static void
+modbusmq_text_byte_put(uint8_t *out, int length, int i, int swap, uint8_t c)
+{
+    int
+        j = swap ? (i ^ 1) : i;
+
+    out[(j < length) ? j : i] = c;
+}
+
+//
+// "1.2.3" back into the bytes or registers it came from. stride is 1 for the
+// byte-packed version formats and 2 for version_regs, matching
+// modbusmq_text_version().
+//
+static int
+modbusmq_encode_version(const char *text, uint8_t *out, int length, int stride)
+{
+    const char
+        *p = text;
+    int
+        i = 0;
+
+    while (*p && i + stride <= length)
+    {
+        char
+            *end = NULL;
+        unsigned long
+            v = strtoul(p, &end, 10);
+
+        if (end == p)
+        {
+            return -1;
+        }
+
+        if (stride == 2)
+        {
+            out[i]   = (v >> 8) & 0xff;
+            out[i+1] = v & 0xff;
+        }
+        else
+        {
+            if (v > 0xff)
+            {
+                return -1;
+            }
+            out[i] = (uint8_t)v;
+        }
+
+        i += stride;
+        p  = end;
+
+        if (*p == '.')
+        {
+            p++;
+        }
+        else if (*p)
+        {
+            return -1;
+        }
+    }
+
+    //
+    // Anything left over is a field that did not fit. Silently dropping it
+    // would make the virtual server serve a version nobody configured.
+    //
+    return (*p == 0) ? length : -1;
+}
+
+/**
+ *
+ * @brief encode a channel's textual default into wire bytes
+ *
+ * The inverse of modbusmq_read_channel_text(), and the reason modbusmq_server
+ * can serve a serial number at all: channel.value goes through strtod() for a
+ * numeric channel, which turns "PIX-00123" into 0.
+ *
+ * The text is the wire content in its natural spelling, not the published
+ * form — digits for bcd, "1.2.3" for a version, "2026-09-14" for a date, and a
+ * plain second count for an epoch format. channel.add is *not* undone here: it
+ * shifts the epoch on the way out, so a config that sets it wants the raw
+ * count written unchanged and the shift applied when it is read back.
+ *
+ * @param channel: channel definition supplying format and length
+ * @param text   : the default, as written in the config
+ * @param out    : destination for channel->length bytes
+ * @param len    : bytes available at out
+ *
+ * @return bytes written, < 0 when the text does not suit the format
+ */
+int
+modbusmq_encode_text(const modbusmq_channel_t *channel, const char *text, uint8_t *out, size_t len)
+{
+    if (!channel || !text || !out)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int
+        length = channel->length;
+
+    if (length <= 0 || (size_t)length > len)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    //
+    // Clear first: every format below fills only as much as the text supplies,
+    // and the padding it leaves behind has to be deterministic — a NUL for
+    // ascii, a zero digit for bcd, an absent version field.
+    //
+    memset(out, 0, length);
+
+    int
+        swap = (channel->format == modbusmq_data_format_ascii_ba ||
+                channel->format == modbusmq_data_format_bcd_ba);
+
+    switch (channel->format)
+    {
+    case modbusmq_data_format_ascii_ab:
+    case modbusmq_data_format_ascii_ba:
+    {
+        int
+            n = (int)strlen(text);
+
+        if (n > length)
+        {
+            return -1;
+        }
+
+        for(int i = 0; i < n; ++i)
+        {
+            modbusmq_text_byte_put(out, length, i, swap, (uint8_t)text[i]);
+        }
+
+        return length;
+    }
+
+    case modbusmq_data_format_bcd_ab:
+    case modbusmq_data_format_bcd_ba:
+    {
+        int
+            ndigit = (int)strlen(text);
+
+        if (ndigit > length * 2)
+        {
+            return -1;
+        }
+
+        //
+        // Right-aligned and zero-padded, which is how a BCD field of fixed
+        // width holds a number shorter than itself.
+        //
+        int
+            pad = length * 2 - ndigit;
+
+        for(int i = 0; i < length; ++i)
+        {
+            uint8_t
+                byte = 0;
+
+            for(int half = 0; half < 2; ++half)
+            {
+                int
+                    pos = i * 2 + half;
+                char
+                    c = (pos < pad) ? '0' : text[pos - pad];
+
+                if (c < '0' || c > '9')
+                {
+                    return -1;
+                }
+
+                byte = (byte << 4) | (uint8_t)(c - '0');
+            }
+
+            modbusmq_text_byte_put(out, length, i, swap, byte);
+        }
+
+        return length;
+    }
+
+    case modbusmq_data_format_version_ab:
+    case modbusmq_data_format_version_abcd:
+        return modbusmq_encode_version(text, out, length, 1);
+    case modbusmq_data_format_version_regs:
+        return modbusmq_encode_version(text, out, length, 2);
+
+    case modbusmq_data_format_date_ymd_abcd:
+    {
+        int
+            y = 0, m = 0, d = 0;
+
+        if (sscanf(text, "%d-%d-%d", &y, &m, &d) != 3)
+        {
+            return -1;
+        }
+
+        out[0] = (y >> 8) & 0xff;
+        out[1] = y & 0xff;
+        out[2] = (uint8_t)m;
+        out[3] = (uint8_t)d;
+
+        return 4;
+    }
+
+    case modbusmq_data_format_datetime_regs:
+    {
+        int
+            field[6] = { 0 };
+
+        if (sscanf(text, "%d-%d-%dT%d:%d:%d",
+                   &field[0], &field[1], &field[2], &field[3], &field[4], &field[5]) != 6 &&
+            sscanf(text, "%d-%d-%d %d:%d:%d",
+                   &field[0], &field[1], &field[2], &field[3], &field[4], &field[5]) != 6)
+        {
+            return -1;
+        }
+
+        for(int i = 0; i < 6; ++i)
+        {
+            out[i*2]     = (field[i] >> 8) & 0xff;
+            out[i*2 + 1] = field[i] & 0xff;
+        }
+
+        return 12;
+    }
+
+    case modbusmq_data_format_epoch32_abcd:
+    case modbusmq_data_format_epoch32_badc:
+    {
+        char
+            *end = NULL;
+        unsigned long long
+            v = strtoull(text, &end, 0);
+
+        if (end == text || *end)
+        {
+            return -1;
+        }
+
+        return modbusmq_encode_value(channel->format == modbusmq_data_format_epoch32_abcd
+                                     ? modbusmq_data_format_uint32_abcd
+                                     : modbusmq_data_format_uint32_badc,
+                                     (double)v, out);
+    }
+
+    default:
+        return -1;
+    }
 }
 
 /**

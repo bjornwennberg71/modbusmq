@@ -16,7 +16,7 @@
 // DEFINES ///////////////////////////////////////////////////////////////////
 
 #define MODBUSMQ_VERSION_MAJOR 2
-#define MODBUSMQ_VERSION_MINOR 3
+#define MODBUSMQ_VERSION_MINOR 4
 #define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
@@ -264,6 +264,52 @@ extern int   modbusmq_channel_format_value(const struct modbusmq_input_t *input,
 // Returns 1 = publish, 0 = suppress, < 0 on bad arguments.
 //
 extern int   modbusmq_channel_publish_decide(struct modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms);
+
+//
+// Text channels: serial numbers, firmware versions, timestamps.
+//
+// These exist because the numeric path cannot carry them. modbusmq_read_channel()
+// returns a float, and a float has 24 mantissa bits: an eight-digit serial
+// number (10^8 > 2^24) loses its low digits outright, and an epoch-seconds
+// timestamp (~2^31) quantises to steps of about two minutes. So a text format
+// decodes from the wire bytes straight to characters and never touches a float
+// on the way.
+//
+// modbusmq_format_is_text() is the one predicate everything else branches on:
+// a caller reads a channel with modbusmq_read_channel_text() when it says yes
+// and modbusmq_read_channel() when it says no. Both hand the result to
+// modbusmq_channel_publish_decide() unchanged — that function already judges
+// "unchanged" on the printed text, so on_change/min_interval/max_interval work
+// on a serial number exactly as they do on a voltage. min_change and
+// min_change_rel are magnitude gates and do not apply; they are rejected at
+// parse time rather than silently ignored.
+//
+// modbusmq_read_channel_text() writes a NUL-terminated string and returns the
+// characters written, or < 0 when the channel is out of range, the bytes are
+// not valid for the format (a BCD nibble above 9, an impossible date), or the
+// buffer is too small. A channel that fails is skipped, not published: a
+// half-decoded serial number is worse than none.
+//
+// buf should be MODBUSMQ_TEXT_MAX bytes.
+//
+extern int   modbusmq_format_is_text(int format);
+    //
+    // Narrower questions about the same set. is_time() is what channel.timefmt
+    // applies to and what still honours channel.add (as an epoch shift);
+    // is_epoch() is the subset carrying a real instant, and so the only one
+    // channel.timezone can meaningfully convert.
+    //
+extern int   modbusmq_format_is_time(int format);
+extern int   modbusmq_format_is_epoch(int format);
+extern int   modbusmq_read_channel_text(struct modbusmq_context_t *context, modbusmq_msg_t *msg, const struct modbusmq_input_t *input, const struct modbusmq_channel_t *channel, char *buf, size_t len);
+
+    //
+    // The inverse, for modbusmq_server: encode a channel's textual default
+    // (channel.value) into channel->length wire bytes. Pads the way the format
+    // expects — NUL for ascii, zero digits for bcd. Returns bytes written,
+    // < 0 when the text does not fit or does not suit the format.
+    //
+extern int   modbusmq_encode_text(const struct modbusmq_channel_t *channel, const char *text, uint8_t *out, size_t len);
 
     //
     // Encode a raw value as wire bytes for a data format. No scaling: the

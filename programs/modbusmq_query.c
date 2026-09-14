@@ -178,6 +178,16 @@ parse_argv(int argc, char **argv)
                 {
                     return -1; // already reported, with the offending name
                 }
+                //
+                // --format describes a write, and a text format cannot be
+                // written. Without this the write would size itself from a
+                // format that reports no size and go out as nothing.
+                //
+                if (modbusmq_format_is_text(GI.format))
+                {
+                    fprintf(stderr, "--format %s: text formats can be read but not written\n", argv[a]);
+                    return -1;
+                }
             }
             else if (strcmp(flag, "--mod") == 0) { GI.mod = (int)strtol(argv[a], NULL, 0); }
             else if (strcmp(flag, "--mul") == 0) { GI.mul = (int)strtol(argv[a], NULL, 0); }
