@@ -60,6 +60,8 @@ extern int      modbusmq_rtu_frame_addr           (modbusmq_context_t *context, 
 extern int      modbusmq_rtu_frame_naddr          (modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int      modbusmq_rtu_frame_nbytes         (modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int      modbusmq_rtu_frame_error_code     (modbusmq_context_t *context, modbusmq_frame_t *frame);
+extern int      modbusmq_rtu_frame_exception      (modbusmq_context_t *context, modbusmq_frame_t *frame);
+extern int      modbusmq_rtu_msg_exception        (modbusmq_context_t *context, modbusmq_msg_t *msg);
 
 #ifdef __cplusplus
 }

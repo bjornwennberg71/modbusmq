@@ -15,6 +15,7 @@
 #endif
 
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -35,6 +36,30 @@ const char *version = MODBUSMQ_VERSION_STRING;
 //
 #define MAX_CONFIG_OVERRIDES 64
 
+//
+// One write waiting for its answer.
+//
+// The library reports success and failure through two different callbacks and
+// identifies the request by nothing but its req_id, so everything the ack has
+// to say -- which entry it belongs to, what was written -- is held here until
+// one of the two fires. Exactly one always does: a posted message ends in the
+// message callback, in the error callback, or in the queue reset that reports
+// every outstanding request as a transport failure.
+//
+typedef struct pending_write_t
+{
+    uint32_t req_id;
+    int      write_index;
+    char     value[96];   // what was written, as the ack reports it
+} pending_write_t;
+
+//
+// Writes are rare and short-lived -- one is on the wire at a time and the
+// frame timeout evicts the worst case -- so a small array scanned end to end
+// beats anything with pointers in it.
+//
+#define PENDING_WRITE_MAX 32
+
 typedef struct global_info
 {
     char config_filename[300];
@@ -53,23 +78,358 @@ typedef struct global_info
 
     int verbose;
     struct mosquitto *mosq;
+
+    pending_write_t pending[PENDING_WRITE_MAX];
+    int             npending;
 } global_info;
  
 
  
 static global_info GI;
 
+#if MQTT_ENABLED
+//////////////////////////////////////////////////////////////////////////////
+//
+// Append to a buffer being filled a piece at a time.
+//
+// The cursor is clamped rather than advanced by whatever snprintf() says it
+// would have written. Plain "pos += snprintf(buf+pos, n-pos, ...)" walks the
+// cursor past the end of the buffer the moment one piece truncates, and every
+// append after that writes somewhere else entirely.
+//
+static void
+json_append(char *buf, int nbuf, int *pos, const char *fmt, ...)
+{
+    if (*pos < 0 || *pos >= nbuf - 1)
+    {
+        return;
+    }
+
+    va_list
+        ap;
+
+    va_start(ap, fmt);
+    int
+        n = vsnprintf(buf + *pos, nbuf - *pos, fmt, ap);
+    va_end(ap);
+
+    if (n < 0)
+    {
+        return;
+    }
+
+    *pos += (n >= nbuf - *pos) ? (nbuf - *pos - 1) : n;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Copy text into a JSON string body, escaping what JSON will not take raw.
+//
+// Names and topics come from a config file and are not this program's to
+// assume well behaved. An unescaped quote does not corrupt the ack, it
+// re-parses it: the consumer reads a different document than the one meant,
+// and finds "ok" in a field that was never about the outcome.
+//
+// Truncation lands on a whole escape, never half of one.
+//
+static void
+json_escape(char *out, int nout, const char *in)
+{
+    int
+        o = 0;
+
+    if (nout <= 0)
+    {
+        return;
+    }
+
+    for(const unsigned char *p = (const unsigned char *)(in ? in : ""); *p; ++p)
+    {
+        char
+            esc[8];
+        int
+            n;
+
+        switch (*p)
+        {
+        case '"':  esc[0] = '\\'; esc[1] = '"';  n = 2; break;
+        case '\\': esc[0] = '\\'; esc[1] = '\\'; n = 2; break;
+        case '\n': esc[0] = '\\'; esc[1] = 'n';  n = 2; break;
+        case '\r': esc[0] = '\\'; esc[1] = 'r';  n = 2; break;
+        case '\t': esc[0] = '\\'; esc[1] = 't';  n = 2; break;
+        default:
+            if (*p < 0x20)
+            {
+                n = snprintf(esc, sizeof(esc), "\\u%04x", *p);
+            }
+            else
+            {
+                esc[0] = (char)*p;
+                n = 1;
+            }
+            break;
+        }
+
+        if (o + n >= nout)
+        {
+            break;
+        }
+
+        memcpy(out + o, esc, n);
+        o += n;
+    }
+
+    out[o] = 0;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Remember a write that is now on the queue, so its answer can be tied back
+// to it when one of the callbacks fires.
+//
+static void
+pending_write_add(uint32_t req_id, int write_index, const char *value)
+{
+    //
+    // Full means something is very wrong -- one write is on the wire at a
+    // time and the frame timeout evicts the worst case -- so drop the oldest
+    // and say so rather than silently refusing to track the newest.
+    //
+    if (GI.npending >= PENDING_WRITE_MAX)
+    {
+        modbusmq_logf(LOG_ERROR, "ack: %d writes already waiting for an answer, dropping the oldest (req %u)\n",
+                      GI.npending, GI.pending[0].req_id);
+
+        memmove(&GI.pending[0], &GI.pending[1], (PENDING_WRITE_MAX - 1) * sizeof(GI.pending[0]));
+        GI.npending = PENDING_WRITE_MAX - 1;
+    }
+
+    pending_write_t
+        *pending = &GI.pending[GI.npending++];
+
+    memset(pending, 0, sizeof(*pending));
+    pending->req_id      = req_id;
+    pending->write_index = write_index;
+
+    snprintf(pending->value, sizeof(pending->value), "%s", value ? value : "");
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Find the write a req_id belongs to and forget it.
+//
+// Every posted message is reported exactly once, so taking the entry out here
+// is what keeps the table bounded. A req_id that is not ours is a poll or a
+// request from somewhere else and is not an error.
+//
+// @return the entry, valid until the next call, or 0
+//
+static pending_write_t *
+pending_write_take(uint32_t req_id)
+{
+    static pending_write_t
+        taken;
+
+    for(int i = 0; i < GI.npending; ++i)
+    {
+        if (GI.pending[i].req_id != req_id)
+        {
+            continue;
+        }
+
+        taken = GI.pending[i];
+
+        memmove(&GI.pending[i], &GI.pending[i+1], (GI.npending - i - 1) * sizeof(GI.pending[0]));
+        GI.npending--;
+
+        return &taken;
+    }
+
+    return NULL;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Publish one ack or nack for a write.
+//
+// JSON, because the failure cases carry more than a word: which request, which
+// entry, and for a device that said no, the exception code it said no with.
+//
+// Never retained. An ack is something that happened once, and a retained one
+// would be replayed to every subscriber that connects afterwards, telling them
+// a write just succeeded when it succeeded last Tuesday.
+//
+// @param write  : the entry this is about
+// @param req_id : the library's request id, or 0 when the write never got one
+// @param status : "ok" or "error"
+// @param value  : what was written, or 0
+// @param reason : short machine-readable cause, or 0
+// @param message: human-readable detail, or 0
+// @param code   : Modbus exception code, or 0
+//
+static void
+mqtt_write_result(const modbusmq_write_t *write, uint32_t req_id, const char *status,
+                  const char *value, const char *reason, const char *message, int code)
+{
+    if (!write->ack || !write->ack_topic)
+    {
+        return;
+    }
+
+    if (!GI.has_mqtt || !GI.mqtt_connected)
+    {
+        modbusmq_logf(LOG_ERROR, "ack %s: not connected to the broker. action: ack dropped\n", write->ack_topic);
+        return;
+    }
+
+    modbusmq_config_t
+        *modbusmq_config = modbusmq_config_get();
+
+    char
+        name[128],
+        topic[256],
+        vbuf[192],
+        mbuf[192],
+        payload[900];
+    int
+        pos = 0;
+
+    json_escape(name,  sizeof(name),  write->name);
+    json_escape(topic, sizeof(topic), write->topic);
+    json_escape(vbuf,  sizeof(vbuf),  value);
+    json_escape(mbuf,  sizeof(mbuf),  message);
+
+    json_append(payload, sizeof(payload), &pos, "{\"status\":\"%s\"", status);
+
+    if (write->name)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"name\":\"%s\"", name);
+    }
+    if (write->topic)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"topic\":\"%s\"", topic);
+    }
+    //
+    // No req_id means the write was refused before it was ever queued, so
+    // there is no request for the consumer to correlate with. Leaving the
+    // field out says that; a zero would read as a request that exists.
+    //
+    if (req_id)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"req\":%u", req_id);
+    }
+    if (value)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"value\":\"%s\"", vbuf);
+    }
+    if (reason)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"reason\":\"%s\"", reason);
+    }
+    if (code > 0)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"code\":%d", code);
+    }
+    if (message)
+    {
+        json_append(payload, sizeof(payload), &pos, ",\"message\":\"%s\"", mbuf);
+    }
+
+    json_append(payload, sizeof(payload), &pos, "}");
+
+    int
+        rc = mosquitto_publish(GI.mosq, NULL, write->ack_topic, pos, payload, modbusmq_config->mqtt_qos, 0);
+
+    if (rc == MOSQ_ERR_NO_CONN || rc == MOSQ_ERR_CONN_LOST)
+    {
+        modbusmq_logf(LOG_INFO, "MQTT: lost connection while publishing an ack, will reconnect\n");
+        GI.mqtt_connected = 0;
+        return;
+    }
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+        modbusmq_logf(LOG_ERROR, "MQTT: unable to publish ack to %s (rc=%d)\n", write->ack_topic, rc);
+        return;
+    }
+
+    modbusmq_logf(LOG_DEBUG, "%s=%s\n", write->ack_topic, payload);
+}
+
+static void
+mqtt_write_ack(const modbusmq_write_t *write, uint32_t req_id, const char *value)
+{
+    mqtt_write_result(write, req_id, "ok", value, NULL, NULL, 0);
+}
+
+static void
+mqtt_write_nack(const modbusmq_write_t *write, uint32_t req_id, const char *reason, const char *message, int code)
+{
+    mqtt_write_result(write, req_id, "error", NULL, reason, message, code);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// The machine-readable half of a nack: the same failure the log line spells
+// out in words, in a form a consumer can branch on without parsing prose.
+//
+static const char *
+modbusmq_error_tag(int error)
+{
+    switch (error)
+    {
+    case MODBUSMQ_ERR_TIMEOUT:   return "timeout";
+    case MODBUSMQ_ERR_PROTOCOL:  return "protocol";
+    case MODBUSMQ_ERR_TRANSPORT: return "transport";
+    case MODBUSMQ_ERR_EXCEPTION: return "exception";
+    default: break;
+    }
+
+    return "error";
+}
+#endif // MQTT_ENABLED
+
 //////////////////////////////////////////////////////////////////////////////
 // 
 // 
+// called when a posted request gets a valid response
+//
+// For this program a posted request is always a write, so this is the ack: the
+// device returned a well-formed echo carrying the function and slave that were
+// asked for. That is as much as an echo can say -- it is not a read-back, and
+// a device that accepts a setpoint and then clamps it will still echo the
+// frame -- so the ack means "the write was accepted", not "the register now
+// reads what you sent".
+//
+// A req_id that is not in the pending table belongs to something else that was
+// posted, which is not an error and not this function's business.
+//
 void
 modbusmq_message_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg)
 {
-    modbusmq_logf(LOG_DEBUG, "modbusmq_message_callback\n");
-    modbusmq_frame_debug(context, &msg->frame[1]);
+#if MQTT_ENABLED
+    pending_write_t
+        *pending = pending_write_take(msg->req_id);
 
-    modbusmq_logf(LOG_DEBUG, "transaction_id = %d\n", modbusmq_frame_transaction_id(context, &msg->frame[0]));
-           
+    if (!pending)
+    {
+        return;
+    }
+
+    modbusmq_config_t
+        *modbusmq_config = modbusmq_config_get();
+    const modbusmq_write_t
+        *write = &modbusmq_config->writes[pending->write_index];
+
+    modbusmq_logf(LOG_INFO, "write %s: slave %d accepted req %u\n",
+                  write->name ? write->name : write->topic,
+                  modbusmq_frame_slave(context, &msg->frame[0]),
+                  msg->req_id);
+
+    mqtt_write_ack(write, msg->req_id, pending->value);
+#else
+    (void)context;
+    (void)msg;
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -87,6 +447,11 @@ modbusmq_error_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg,
     const char
         *reason = "failed";
 
+    int
+        code = 0;
+    char
+        detail[160];
+
     switch(error)
     {
     case MODBUSMQ_ERR_TIMEOUT:
@@ -98,6 +463,17 @@ modbusmq_error_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg,
     case MODBUSMQ_ERR_TRANSPORT:
         reason = "is unreachable, the connection is gone";
         break;
+    case MODBUSMQ_ERR_EXCEPTION:
+        //
+        // The device heard the request and declined it. The code is the only
+        // part of this worth passing on -- it is the difference between a
+        // register that does not exist and one the device will not let you
+        // write today.
+        //
+        code   = modbusmq_frame_exception_code(context, &msg->frame[1]);
+        snprintf(detail, sizeof(detail), "refused the request: %s (%d)", modbusmq_exception_string(code), code);
+        reason = detail;
+        break;
     }
 
     modbusmq_logf(LOG_ERROR, "slave %d (addr 0x%04X, req %u) %s\n",
@@ -105,6 +481,26 @@ modbusmq_error_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg,
                   modbusmq_frame_addr(context, &msg->frame[0]),
                   msg->req_id,
                   reason);
+
+#if MQTT_ENABLED
+    //
+    // ...and if this was a write somebody asked for over MQTT, tell them so
+    // rather than only the log.
+    //
+    pending_write_t
+        *pending = pending_write_take(msg->req_id);
+
+    if (pending)
+    {
+        modbusmq_config_t
+            *modbusmq_config = modbusmq_config_get();
+
+        mqtt_write_nack(&modbusmq_config->writes[pending->write_index], msg->req_id,
+                        modbusmq_error_tag(error),
+                        code > 0 ? modbusmq_exception_string(code) : modbusmq_strerror(error),
+                        code);
+    }
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -229,7 +625,8 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
 // @return 0 on success with *out set, < 0 when the payload is not usable
 //
 static int
-mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *out)
+mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *out,
+                   char *why, int nwhy)
 {
     const char
         *name = write->name ? write->name : write->topic;
@@ -241,8 +638,8 @@ mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *o
 
     if (!*payload)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: empty payload. action: skip write\n", name);
-        return -1;
+        snprintf(why, nwhy, "empty payload");
+        goto fail;
     }
 
     if (write->has_on_value)
@@ -269,8 +666,8 @@ mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *o
 
             if (end == payload || *end)
             {
-                modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" is not a command. action: skip write\n", name, payload);
-                return -1;
+                snprintf(why, nwhy, "payload \"%s\" is not a command", payload);
+                goto fail;
             }
             //
             // Compare against the configured values rather than treating any
@@ -287,9 +684,9 @@ mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *o
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" is neither on_value %d nor off_value %d. action: skip write\n",
-                              name, payload, write->on_value, write->off_value);
-                return -1;
+                snprintf(why, nwhy, "payload \"%s\" is neither on_value %d nor off_value %d",
+                         payload, write->on_value, write->off_value);
+                goto fail;
             }
         }
 
@@ -304,8 +701,8 @@ mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *o
 
     if (end == payload)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" is not a number. action: skip write\n", name, payload);
-        return -1;
+        snprintf(why, nwhy, "payload \"%s\" is not a number", payload);
+        goto fail;
     }
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')
     {
@@ -313,34 +710,155 @@ mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *o
     }
     if (*end)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: payload \"%s\" has trailing junk. action: skip write\n", name, payload);
-        return -1;
+        snprintf(why, nwhy, "payload \"%s\" has trailing junk", payload);
+        goto fail;
     }
 
     *out = d;
     return 0;
+
+fail:
+    modbusmq_logf(LOG_ERROR, "write %s: %s. action: skip write\n", name, why);
+    return -1;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Split a block write's payload into one value per channel.
+//
+// "63,1,230", "63 1 230" and "[63, 1, 230]" are the same list: a JSON array of
+// numbers is this with brackets on, and refusing it over punctuation would
+// help nobody.
+//
+// An empty payload, or the word "default", asks for the values the config
+// already carries. That is the commissioning case the block write exists for:
+// the settings live in the file, reviewed and in version control, and
+// publishing anything at all to the topic sends them.
+//
+// @return number of values parsed, 0 for the trigger form, < 0 when unusable
+//
+static int
+mqtt_payload_block(const modbusmq_write_t *write, const char *payload, double *values, int nmax,
+                   char *why, int nwhy)
+{
+    const char
+        *name = write->name ? write->name : write->topic;
+    const char
+        *p = payload;
+    int
+        n = 0;
+
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+    {
+        p++;
+    }
+
+    if (!*p || strcasecmp(p, "default") == 0 || strcasecmp(p, "defaults") == 0)
+    {
+        if (!write->has_defaults)
+        {
+            snprintf(why, nwhy, "no value list, and not every channel has a default to fall back on");
+            goto fail;
+        }
+        return 0;
+    }
+
+    if (*p == '[')
+    {
+        p++;
+    }
+
+    while (*p)
+    {
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ',')
+        {
+            p++;
+        }
+        if (!*p || *p == ']')
+        {
+            break;
+        }
+
+        if (n >= nmax)
+        {
+            snprintf(why, nwhy, "more values than the %d this block holds", nmax);
+            goto fail;
+        }
+
+        char
+            *end = NULL;
+        double
+            d = strtod(p, &end);
+
+        if (end == p)
+        {
+            snprintf(why, nwhy, "payload \"%s\" is not a list of numbers", payload);
+            goto fail;
+        }
+
+        values[n++] = d;
+        p = end;
+    }
+
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ']')
+    {
+        p++;
+    }
+    if (*p)
+    {
+        snprintf(why, nwhy, "payload \"%s\" has trailing junk", payload);
+        goto fail;
+    }
+
+    //
+    // A short list is the dangerous one: it would leave the rest of a block
+    // that gets written whole filled with whatever the caller did not say.
+    //
+    if (n != write->channel_max)
+    {
+        snprintf(why, nwhy, "%d value(s) for a block of %d channels", n, write->channel_max);
+        goto fail;
+    }
+
+    return n;
+
+fail:
+    modbusmq_logf(LOG_ERROR, "write %s: %s. action: skip write\n", name, why);
+    return -1;
 }
 
 //////////////////////////////////////////////////////////////////////////////
 //
 // Queue the Modbus write for one write entry.
 //
-// Fire and forget: the request goes on the same queue as every poll, so it is
-// serialised with them and needs no locking, and nothing here waits for the
-// echo. A write that fails reports through modbusmq_error_callback() like any
-// other request.
+// The request goes on the same queue as every poll, so it is serialised with
+// them and needs no locking, and nothing here blocks waiting for the echo. A
+// write with ack set is remembered in the pending table on the way out and
+// answered on MQTT when modbusmq_message_callback() or
+// modbusmq_error_callback() reports what became of it.
+//
+// A write that never gets as far as the queue is nacked here instead, since
+// there will be no request id for either callback to report it under.
+//
+// @param write_index: which config entry, for the ack
+// @param values     : one value per channel for a block, or one value
+// @param nvalues    : how many, or < 0 for a block's configured defaults
 //
 // @return 0 when queued, < 0 when it was not
 //
 static int
-modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *write, double value)
+modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *write, int write_index,
+                  const double *values, int nvalues)
 {
     const char
         *name = write->name ? write->name : write->topic;
+    char
+        written[96];
 
     if (!GI.modbus_connected)
     {
         modbusmq_logf(LOG_ERROR, "write %s: device is not connected. action: skip write\n", name);
+        mqtt_write_nack(write, 0, "offline", "not connected to the device", 0);
         return -1;
     }
 
@@ -348,10 +866,58 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
         msg;
 
     memset(&msg, 0, sizeof(msg));
+    written[0] = 0;
     modbusmq_set_slave(context, write->slave);
 
-    if (write->function == modbusmq_write_function_coil)
+    if (write->channel_max > 0)
     {
+        //
+        // A block. Function 16 carries at most 123 registers and the config
+        // validator has already held the block to that, so the array below is
+        // the largest one that can ever be asked for.
+        //
+        uint16_t
+            regs[123];
+        int
+            nregs = modbusmq_write_encode_block(context, write, values, nvalues, regs, (int)(sizeof(regs)/sizeof(regs[0])));
+
+        if (nregs < 0)
+        {
+            mqtt_write_nack(write, 0, "encode", "a value does not fit its channel format", 0);
+            return -1; // already logged, with the reason
+        }
+
+        modbusmq_frame_write_registers(context, &msg.frame[0], write->address, nregs, regs);
+
+        //
+        // What the ack will report. Built from the same values that went into
+        // the frame, in channel order, so a trigger write says what it sent
+        // rather than only that it sent something.
+        //
+        int
+            pos = 0;
+
+        for(int c = 0; c < write->channel_max; ++c)
+        {
+            double
+                v = (nvalues < 0) ? write->channels[c].value : values[c];
+
+            pos += snprintf(written + pos, sizeof(written) - pos, "%s%.6g", pos ? "," : "", v);
+            if (pos >= (int)sizeof(written))
+            {
+                pos = (int)sizeof(written) - 1;
+                break;
+            }
+        }
+
+        modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X..0x%04X = %s%s\n",
+                      name, write->slave, write->address, write->address + nregs - 1,
+                      written, (nvalues < 0) ? " (defaults)" : "");
+    }
+    else if (write->function == modbusmq_write_function_coil)
+    {
+        double
+            value = values[0];
         int
             on = (value != 0);
 
@@ -365,10 +931,13 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
         }
 
         modbusmq_frame_write_coil_bit(context, &msg.frame[0], write->address, on);
+        snprintf(written, sizeof(written), "%d", on);
         modbusmq_logf(LOG_INFO, "write %s: slave %d coil 0x%04X = %d\n", name, write->slave, write->address, on);
     }
     else
     {
+        double
+            value = values[0];
         uint16_t
             regs[2] = {0};
         int
@@ -376,8 +945,11 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 
         if (nregs < 0)
         {
+            mqtt_write_nack(write, 0, "encode", "the value does not fit the configured format", 0);
             return -1; // already logged, with the reason
         }
+
+        snprintf(written, sizeof(written), "%.6g", value);
 
         if (nregs == 1)
         {
@@ -398,7 +970,17 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
     if (rc != 0)
     {
         modbusmq_logf(LOG_ERROR, "write %s: unable to queue the request, rc=%d\n", name, rc);
+        mqtt_write_nack(write, 0, "queue", "the request could not be queued", 0);
         return -1;
+    }
+
+    //
+    // modbusmq_post() stamps the request id into our copy before queueing it,
+    // so this is the id the callbacks will report the answer under.
+    //
+    if (write->ack)
+    {
+        pending_write_add(msg.req_id, write_index, written);
     }
 
     return 0;
@@ -409,7 +991,8 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 // mosquitto message callback: an incoming publish on a write topic
 //
 // More than one write entry may share a topic, so every match is acted on
-// rather than only the first.
+// rather than only the first -- and each one answers for itself, which is why
+// the ack topic hangs off the entry and not off the topic published to.
 //
 static void
 mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message)
@@ -429,8 +1012,10 @@ mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosqu
     // The payload is not NUL-terminated on the wire and is attacker-adjacent
     // input, so copy it into a bounded buffer before treating it as a string.
     //
+    // a block of 123 registers spelled out as a list of numbers is the
+    // largest thing any write entry can be asked to take
     char
-        payload[64];
+        payload[1024];
     int
         len = message->payloadlen;
 
@@ -460,15 +1045,42 @@ mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosqu
 
         matched++;
 
+        char
+            why[160] = {0};
+
+        if (write->channel_max > 0)
+        {
+            double
+                values[123];
+            int
+                nvalues = mqtt_payload_block(write, payload, values,
+                                             (int)(sizeof(values)/sizeof(values[0])), why, sizeof(why));
+
+            if (nvalues < 0)
+            {
+                mqtt_write_nack(write, 0, "payload", why, 0);
+                continue; // already logged
+            }
+
+            //
+            // 0 values is the trigger form. modbusmq_write_encode_block()
+            // spells that as a negative count, since 0 there would be a list
+            // that happens to be empty.
+            //
+            modbus_write_post(context, write, w, values, nvalues > 0 ? nvalues : -1);
+            continue;
+        }
+
         double
             value = 0;
 
-        if (mqtt_payload_value(write, payload, &value) != 0)
+        if (mqtt_payload_value(write, payload, &value, why, sizeof(why)) != 0)
         {
+            mqtt_write_nack(write, 0, "payload", why, 0);
             continue; // already logged
         }
 
-        modbus_write_post(context, write, value);
+        modbus_write_post(context, write, w, &value, 1);
     }
 
     if (!matched)
@@ -518,8 +1130,10 @@ mqtt_subscribe_writes(void)
             continue;
         }
 
-        modbusmq_logf(LOG_INFO, "MQTT: subscribed to %s -> %s\n",
-                      write->topic, write->name ? write->name : "write");
+        modbusmq_logf(LOG_INFO, "MQTT: subscribed to %s -> %s%s%s\n",
+                      write->topic, write->name ? write->name : "write",
+                      write->ack_topic ? ", ack on " : "",
+                      write->ack_topic ? write->ack_topic : "");
     }
 
     return rc_all;
@@ -754,6 +1368,27 @@ main(int argc, char **argv)
         fprintf(stderr, "WARNING: %d write entries configured but no mqtt.connect — nothing can trigger them\n",
                 modbusmq_config->write_max);
     }
+
+    //
+    // The trigger form of a block write needs every channel to carry a value.
+    // Worth saying at startup: a commissioning block that can only be driven
+    // by a full value list is a config someone probably meant to finish, and
+    // finding that out from a nack in the field is finding it out late.
+    //
+    for(int w = 0; w < modbusmq_config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &modbusmq_config->writes[w];
+
+        if (write->channel_max <= 0 || write->has_defaults)
+        {
+            continue;
+        }
+
+        fprintf(stderr, "NOTE: write.%d (%s) is a %d-register block with no complete set of defaults — "
+                        "it takes a list of %d values, an empty payload will not trigger it\n",
+                w+1, write->name ? write->name : "?", write->naddress, write->channel_max);
+    }
 #if !MQTT_ENABLED
     if (modbusmq_config->write_max > 0)
     {
@@ -853,7 +1488,7 @@ main(int argc, char **argv)
     //
     // set up callbacks
     //
-    //modbusmq_set_message_callback(     context, &modbusmq_message_callback);
+    modbusmq_set_message_callback(     context, &modbusmq_message_callback);
     modbusmq_set_subscription_callback(context, &modbusmq_subscription_callback);
     modbusmq_set_error_callback(       context, &modbusmq_error_callback);
 

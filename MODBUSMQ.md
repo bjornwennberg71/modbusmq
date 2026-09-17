@@ -275,8 +275,69 @@ Check the scaling before sending anything, with no device attached:
     --write 25.5 --format int_ab --mod -10 --dry-run
 ```
 
-Writes are fire and forget. A failure is logged and reported through the error
-callback; nothing waits for the echo and nothing retries.
+### A block of registers at once
+
+A device that takes its commissioning settings as one block — a fuse wanting
+rated current, trip curve and nominal voltage together — gets a write entry with
+channels instead of a single format. Each channel says what sits where inside the
+block, `offset` counting bytes from its start:
+
+```
+write.1.name        = fuse_settings
+write.1.slave       = 12
+write.1.type        = holding_register
+write.1.address     = 0x1000
+write.1.topic       = settings/fuse1
+write.1.channel.max = 3
+
+write.1.channel.1.name = rated_current
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.1.mod    = -10
+write.1.channel.1.value  = 63
+
+write.1.channel.2.name = trip_curve
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab
+write.1.channel.2.value  = 2
+
+write.1.channel.3.name = nominal_voltage
+write.1.channel.3.offset = 4
+write.1.channel.3.format = uint_ab
+write.1.channel.3.value  = 230
+```
+
+Publish a list to set it — `63,2,230`, or `[63, 2, 230]` — or publish nothing at
+all to write the values the config already carries, which is what makes this a
+commissioning button rather than three separate setpoints.
+
+The whole block goes out in one function 16 frame, so it either lands complete or
+not at all. That is why every register it covers has to belong to a channel: a gap
+is refused at startup rather than written as a zero nobody asked for.
+
+### Acks
+
+Writes go out fire and forget — nothing blocks on the echo and nothing retries.
+The outcome is logged, and with `ack` set it is published too:
+
+```
+mqtt.ack = 1
+```
+
+```json
+{"status":"ok","name":"fuse_settings","topic":"settings/fuse1","req":42,"value":"63,2,230"}
+{"status":"error","name":"fuse_settings","topic":"settings/fuse1","req":43,"reason":"exception","code":2,"message":"illegal data address"}
+```
+
+Acks go to the write topic with `/ack` appended unless `write.N.ack_topic` says
+otherwise, and are never retained. `ok` means the device returned a matching echo:
+the write was accepted.
+
+The ack reports the device's answer and nothing else. `modbusmq` writes what it
+was asked to write and tells you what came back — it does not read the register
+afterwards, compare it, or retry. Publish `-10` and `-10` goes on the wire.
+Whether that needs asserting again is the application's call, and belongs where
+the requirement lives.
 
 **Do not retain command topics.** A retained payload is replayed by the broker on
 every subscribe, including after each reconnect, so a retained setpoint gets

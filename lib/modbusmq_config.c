@@ -359,6 +359,20 @@ modbusmq_config_apply_format_version(modbusmq_config_t *config, const char *file
         case modbusmq_data_format_int16_ba: write->format = modbusmq_data_format_ba; changed++; break;
         default: break;
         }
+
+        for(int c = 0; c < write->channel_max; ++c)
+        {
+            modbusmq_write_channel_t
+                *channel = &write->channels[c];
+
+            switch (channel->format)
+            {
+            case modbusmq_data_format_int8:     channel->format = modbusmq_data_format_a;  changed++; break;
+            case modbusmq_data_format_int16_ab: channel->format = modbusmq_data_format_ab; changed++; break;
+            case modbusmq_data_format_int16_ba: channel->format = modbusmq_data_format_ba; changed++; break;
+            default: break;
+            }
+        }
     }
 
     if (changed > 0)
@@ -631,6 +645,154 @@ modbusmq_config_override_unmatched(void)
     }
 
     return unmatched;
+}
+
+//
+// Validate the channels of one block write and settle how long the block is.
+//
+// A block is written whole, so the config has to describe it whole: every
+// register from address to address+naddress has to belong to exactly one
+// channel. A gap could only be filled by reading the device first, and a
+// read-modify-write spread over two frames is not atomic on a bus that is
+// also being polled — the poll in between is entitled to see either version,
+// and so is anything else writing to the same device. One function 16 frame
+// either lands whole or does not land at all, which is the property worth
+// keeping. So a gap is refused here, while it is still a typo in a file
+// rather than a zero in a fuse.
+//
+// @param w: zero-based index of the write entry, for the messages
+// @param write: the entry, whose naddress and has_defaults this fills in
+//
+// @return 0 when the block is consistent, < 0 with a message on stderr
+//
+static int
+config_validate_write_block(int w, modbusmq_write_t *write)
+{
+    const char
+        *name = write->name ? write->name : "?";
+    int
+        span     = 0,
+        defaults = 1;
+
+    for(int c = 0; c < write->channel_max; ++c)
+    {
+        modbusmq_write_channel_t
+            *channel = &write->channels[c];
+        const char
+            *cname = channel->name ? channel->name : "?";
+
+        if (channel->format == modbusmq_data_format_unknown)
+        {
+            fprintf(stderr, "write.%d.channel.%d (%s): format is required\n", w+1, c+1, cname);
+            return -1;
+        }
+        //
+        // Same reason as the single-value path: a write scales a number, and
+        // a serial number or a clock is not one.
+        //
+        if (modbusmq_format_is_text(channel->format))
+        {
+            fprintf(stderr, "write.%d.channel.%d (%s): text formats can be read but not written\n", w+1, c+1, cname);
+            return -1;
+        }
+        if (channel->length != 2 && channel->length != 4)
+        {
+            fprintf(stderr, "write.%d.channel.%d (%s): a register write is 2 or 4 bytes, %s is %d\n",
+                    w+1, c+1, cname, modbusmq_config_dataformat_name(channel->format), channel->length);
+            return -1;
+        }
+        //
+        // offset counts bytes from the start of the block, the way an input
+        // channel counts them, so a register boundary is an even one.
+        //
+        if (channel->offset < 0 || (channel->offset % 2) != 0)
+        {
+            fprintf(stderr, "write.%d.channel.%d (%s): offset %d is not on a register boundary -- offset counts bytes, so it is even\n",
+                    w+1, c+1, cname, channel->offset);
+            return -1;
+        }
+
+        if (channel->offset + channel->length > span)
+        {
+            span = channel->offset + channel->length;
+        }
+        if (!channel->has_value)
+        {
+            defaults = 0;
+        }
+    }
+
+    //
+    // naddress is optional: the channels already say how long the block is.
+    // Spelling it out is still allowed, because a device whose last register
+    // is a reserved word nobody reads should be writable without inventing a
+    // channel for it -- and that is exactly the case the gap check below
+    // refuses, so the two together mean an explicit naddress has to be
+    // covered like everything else.
+    //
+    int
+        nregs = write->has_naddress ? write->naddress : span / 2;
+
+    if (nregs <= 0 || nregs > 123)
+    {
+        fprintf(stderr, "write.%d (%s): a block is 1..123 registers, this one works out to %d\n", w+1, name, nregs);
+        return -1;
+    }
+
+    //
+    // One byte per register rather than a bitmap: 123 of them is nothing, and
+    // counting the claims tells an overlap and a gap apart in one pass each.
+    //
+    uint8_t
+        claimed[123];
+
+    memset(claimed, 0, sizeof(claimed));
+
+    for(int c = 0; c < write->channel_max; ++c)
+    {
+        modbusmq_write_channel_t
+            *channel = &write->channels[c];
+        const char
+            *cname = channel->name ? channel->name : "?";
+        int
+            first = channel->offset / 2,
+            last  = first + channel->length / 2;
+
+        if (last > nregs)
+        {
+            fprintf(stderr, "write.%d.channel.%d (%s): offset %d is %d register(s) into a block that is only %d long\n",
+                    w+1, c+1, cname, channel->offset, last, nregs);
+            return -1;
+        }
+
+        for(int r = first; r < last; ++r)
+        {
+            if (claimed[r]++)
+            {
+                fprintf(stderr, "write.%d.channel.%d (%s): register offset %d (address 0x%04X) is already claimed by another channel\n",
+                        w+1, c+1, cname, r, write->address + r);
+                return -1;
+            }
+        }
+    }
+
+    for(int r = 0; r < nregs; ++r)
+    {
+        if (!claimed[r])
+        {
+            fprintf(stderr, "write.%d (%s): register offset %d (address 0x%04X) belongs to no channel. A block write sends every "
+                            "register it covers, so this one would go out as a zero nobody asked for -- give it a channel, "
+                            "or shorten the block\n",
+                    w+1, name, r, write->address + r);
+            return -1;
+        }
+    }
+
+    write->naddress     = nregs;
+    write->has_naddress = 1;
+    write->has_defaults = defaults;
+
+    return 0;
 }
 
 int
@@ -1362,6 +1524,138 @@ modbusmq_config_parse(const char *filename)
             {
                 config_set_string(&write->topic, value);
             }
+            else if (strcmp(write_key, "ack_topic") == 0)
+            {
+                config_set_string(&write->ack_topic, value);
+            }
+            else if (strcmp(write_key, "ack") == 0)
+            {
+                write->ack = config_boolean(value);
+                if (write->ack < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                write->has_ack = 1;
+            }
+            else if (strcmp(write_key, "naddress") == 0)
+            {
+                write->naddress     = (int)strtoul(value, NULL, 0);
+                write->has_naddress = 1;
+            }
+            else if (strcmp(write_key, "channel.max") == 0)
+            {
+                if (write->channels)
+                {
+                    fprintf(stderr, "%d: %s listed more than once. The array is allocated when this key is read, "
+                                "so a second one would discard everything already parsed into the first.\n", line_num, key);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                int
+                    nvalue = (int)strtoul(value, NULL, 0);
+                //
+                // 123 registers is what function 16 carries, and a channel is
+                // at least one register, so no block can hold more than that
+                // many channels however they are laid out.
+                //
+                if (nvalue <= 0 || nvalue > 123)
+                {
+                    fprintf(stderr, "%d: %s must be between [1..123]\n", line_num, key);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                write->channel_max = nvalue;
+                write->channels    = malloc(nvalue * sizeof(modbusmq_write_channel_t));
+                if (!write->channels)
+                {
+                    perror("Unable to allocate");
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                memset(write->channels, 0, nvalue * sizeof(modbusmq_write_channel_t));
+            }
+            else if (strncmp(write_key, "channel.", 8) == 0)
+            {
+                // write.{}.channel.{}
+                int
+                    channel_num = 0;
+                char
+                    channel_key[100];
+
+                int
+                    nscan = sscanf(write_key, "channel.%d.%99s", &channel_num, channel_key);
+                if (nscan != 2)
+                {
+                    fprintf(stderr, "%d: %s: Unable to scan key\n", line_num, key);
+                    continue;
+                }
+
+                //
+                // Hard error rather than the input side's skip-and-warn: a
+                // channel silently dropped from a block leaves a register with
+                // nothing in it, and the block is written whole.
+                //
+                if (channel_num <= 0 || channel_num > write->channel_max)
+                {
+                    fprintf(stderr, "%d: %s, channel.{%d} must be between 1..%d (is write.%d.channel.max set, and set first?)\n",
+                            line_num, key, channel_num, write->channel_max, write_num);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+
+                modbusmq_write_channel_t
+                    *channel = &write->channels[channel_num-1];
+
+                if (strcmp(channel_key, "name") == 0)
+                {
+                    config_set_string(&channel->name, value);
+                }
+                else if (strcmp(channel_key, "offset") == 0)
+                {
+                    channel->offset = (int)strtoul(value, NULL, 0);
+                }
+                else if (strcmp(channel_key, "format") == 0)
+                {
+                    channel->format = modbusmq_config_dataformat(value);
+                    if (channel->format == modbusmq_data_format_unknown)
+                    {
+                        fprintf(stderr, "%d: %s=%s: unknown format\n", line_num, key, value);
+                        fclose(fp);
+                        free(line);
+                        return -1;
+                    }
+                    channel->length = modbusmq_format_size(channel->format);
+                }
+                else if (strcmp(channel_key, "add") == 0)
+                {
+                    channel->add = strtod(value, NULL);
+                }
+                else if (strcmp(channel_key, "mod") == 0)
+                {
+                    channel->mod = strtod(value, NULL);
+                }
+                else if (strcmp(channel_key, "mul") == 0)
+                {
+                    channel->mul = strtod(value, NULL);
+                }
+                else if (strcmp(channel_key, "value") == 0)
+                {
+                    channel->value     = strtod(value, NULL);
+                    channel->has_value = 1;
+                }
+                else
+                {
+                    fprintf(stderr, "%d: %s: Unknown configuration\n", line_num, key);
+                    continue;
+                }
+            }
             else
             {
                 fprintf(stderr, "%d: %s: Unknown configuration\n", line_num, key);
@@ -1401,6 +1695,21 @@ modbusmq_config_parse(const char *filename)
         else if (strcmp(key, "mqtt.topic_prefix") == 0)
         {
             config_set_string(&modbusmq_config->mqtt_topic_prefix, value);
+        }
+        //
+        // Config-wide default for write.N.ack. Off, so nothing starts
+        // publishing acks because a config was upgraded.
+        //
+        else if (strcmp(key, "mqtt.ack") == 0)
+        {
+            modbusmq_config->mqtt_ack = config_boolean(value);
+            if (modbusmq_config->mqtt_ack < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
         }
         //
         // Config-wide defaults for the publish rate-limiting keys — the
@@ -1683,6 +1992,65 @@ modbusmq_config_parse(const char *filename)
         }
 
         //
+        // A block write is the entry that has channels. Everything the
+        // single-value shape puts on the entry -- format, scaling, the on/off
+        // mapping -- belongs on the individual channels there, since the whole
+        // point of a block is that its registers are different things. An
+        // entry carrying both would mean two incompatible things at once.
+        //
+        int
+            is_block = (write->channel_max > 0);
+
+        if (is_block)
+        {
+            if (write->format || write->add || write->mod || write->mul)
+            {
+                fprintf(stderr, "write.%d (%s): format/add/mod/mul belong on write.%d.channel.M.* in a block write, not on the entry\n",
+                        w+1, name, w+1);
+                return -1;
+            }
+            if (write->has_on_value)
+            {
+                fprintf(stderr, "write.%d (%s): on_value/off_value map a single on/off command and do not apply to a block write\n",
+                        w+1, name);
+                return -1;
+            }
+            if (write->type     == modbusmq_type_coil ||
+                write->function == modbusmq_write_function_coil)
+            {
+                fprintf(stderr, "write.%d (%s): a block write is registers; coils are written one at a time\n", w+1, name);
+                return -1;
+            }
+            if (write->function != modbusmq_write_function_unknown &&
+                write->function != modbusmq_write_function_registers)
+            {
+                fprintf(stderr, "write.%d (%s): a block write needs function %s\n",
+                        w+1, name, MODBUSMQ_FUNCTION_WRITE_REGISTERS);
+                return -1;
+            }
+
+            write->function = modbusmq_write_function_registers;
+            write->type     = modbusmq_type_holding_register;
+
+            if (config_validate_write_block(w, write) < 0)
+            {
+                return -1;
+            }
+
+            continue;
+        }
+
+        //
+        // naddress without channels describes a block nobody laid out.
+        //
+        if (write->has_naddress)
+        {
+            fprintf(stderr, "write.%d (%s): naddress describes a block, so it needs write.%d.channel.max and the channels to go with it\n",
+                    w+1, name, w+1);
+            return -1;
+        }
+
+        //
         // type and function are two ways of saying the same thing. Accept
         // either, derive the missing one, and refuse a config that says both
         // and disagrees with itself.
@@ -1813,7 +2181,63 @@ modbusmq_config_parse(const char *filename)
             strcat(topic, write->topic);
             free(write->topic);
             write->topic = topic;
+
+            if (!write->ack_topic)
+            {
+                continue;
+            }
+
+            int
+                nack = strlen(write->ack_topic);
+
+            char *ack_topic = malloc(nprefix + nack + 1);
+            if (!ack_topic)
+            {
+                perror("Unable to allocate");
+                return -1;
+            }
+            strcpy(ack_topic, modbusmq_config->mqtt_topic_prefix);
+            strcat(ack_topic, write->ack_topic);
+            free(write->ack_topic);
+            write->ack_topic = ack_topic;
         }
+    }
+
+    //
+    // Settle the ack once, here, rather than leaving the runtime to work out
+    // per message whether this entry wants one: an entry says so itself, or
+    // takes mqtt.ack, which is off.
+    //
+    // The default topic is derived after the prefix has gone on, so an ack
+    // lands next to the topic that triggered it whatever namespace that is in.
+    //
+    for(int w = 0; w < modbusmq_config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &modbusmq_config->writes[w];
+
+        if (!write->has_ack)
+        {
+            write->ack     = modbusmq_config->mqtt_ack;
+            write->has_ack = 1;
+        }
+
+        if (!write->ack || write->ack_topic || !write->topic)
+        {
+            continue;
+        }
+
+        const char
+            *suffix = MODBUSMQ_ACK_SUFFIX;
+
+        write->ack_topic = malloc(strlen(write->topic) + strlen(suffix) + 1);
+        if (!write->ack_topic)
+        {
+            perror("Unable to allocate");
+            return -1;
+        }
+        strcpy(write->ack_topic, write->topic);
+        strcat(write->ack_topic, suffix);
     }
 
 
@@ -1851,8 +2275,18 @@ modbusmq_config_close()
     {
         modbusmq_write_t
             *write = &modbusmq_config->writes[w];
-        if (write->name)  { free(write->name); }
-        if (write->topic) { free(write->topic); }
+        if (write->name)      { free(write->name); }
+        if (write->topic)     { free(write->topic); }
+        if (write->ack_topic) { free(write->ack_topic); }
+
+        for(int c = 0; c < write->channel_max; ++c)
+        {
+            if (write->channels[c].name)
+            {
+                free(write->channels[c].name);
+            }
+        }
+        free(write->channels);
     }
     free(modbusmq_config->writes);
 

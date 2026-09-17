@@ -559,7 +559,7 @@ A **write** is the mirror image of an input: instead of polling a register and p
 write.max = 2
 ```
 
-Writes are **fire and forget**. The request is queued alongside the polls, so it shares the bus in turn and needs no separate connection; nothing waits for the echo. A write that fails is reported through the normal error path, tagged with its slave and address.
+The request is queued alongside the polls, so it shares the bus in turn and needs no separate connection, and nothing blocks waiting for the echo. A write that fails is reported through the normal error path, tagged with its slave and address — and, with `ack` set, published back to the broker as well. See [Acknowledgements](#acknowledgements).
 
 ### Per-write keys
 
@@ -581,7 +581,7 @@ write.N.topic     = settings/compressor   # subscribed, never published
 | Function           | Modbus | Writes                                  |
 |--------------------|--------|-----------------------------------------|
 | `write_register`   | 06     | one register — 2-byte formats           |
-| `write_registers`  | 16     | two registers — 4-byte formats           |
+| `write_registers`  | 16     | two registers for a 4-byte format, or a whole block — see [Block writes](#block-writes) |
 | `write_coil`       | 05     | one coil (bit)                          |
 
 `write.N.type` accepts `coil` or `holding_register` only. A `discrete_input` is read-only by definition and an `input_register` has no write function at all, so both are rejected.
@@ -610,6 +610,151 @@ So a channel reading `mod = -10` publishes `raw / 10`, and a write with `mod = -
 With `on_value` and `off_value` set, the payload is treated as a command rather than a measurement. `1`/`0` work, and so do `on`/`off`/`true`/`false` in any case, since brokers differ on what they publish. Anything else is rejected and logged.
 
 Set both or neither. They work for register writes too, not just coils — some models take power on/off as a register value rather than a coil.
+
+### Block writes
+
+Some devices will not be configured one register at a time. A meter or a fuse that takes its rated current, its trip curve and its nominal voltage as one commissioning block expects all of it in a single function 16 frame, and writing the same registers one at a time is either rejected or, worse, half accepted.
+
+A write entry with channels is a block. Each channel says what sits where inside it, the same way an input's channels say what sits where inside a poll:
+
+```
+write.1.name        = fuse_settings
+write.1.slave       = 12
+write.1.type        = holding_register
+write.1.address     = 0x1000            # first register of the block
+write.1.naddress    = 5                 # block length in registers; optional
+write.1.topic       = settings/fuse1
+write.1.channel.max = 4                 # before any write.1.channel.N key
+
+write.1.channel.1.name   = rated_current
+write.1.channel.1.offset = 0            # BYTES from the start of the block
+write.1.channel.1.format = uint_ab
+write.1.channel.1.mod    = -10
+write.1.channel.1.value  = 63           # default, used by the trigger form
+
+write.1.channel.2.name   = trip_curve
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab
+write.1.channel.2.value  = 2
+
+write.1.channel.3.name   = nominal_voltage
+write.1.channel.3.offset = 4
+write.1.channel.3.format = uint_ab
+write.1.channel.3.value  = 230
+
+write.1.channel.4.name   = serial_limit
+write.1.channel.4.offset = 6            # 4-byte format, so it spans two registers
+write.1.channel.4.format = uint_abcd
+write.1.channel.4.value  = 100000
+```
+
+`offset` counts **bytes**, not registers, exactly as `input.N.channel.M.offset` does for a register type — so the second register of a block is offset 2. Each channel carries its own `format`, `add`, `mod` and `mul`; the entry itself carries none, because the whole point of a block is that its registers are different things. Giving the entry a `format` alongside channels is refused rather than guessed at.
+
+`naddress` is optional. Left out, the channels say how long the block is. Spelled out, it must still be covered.
+
+#### The block is written whole
+
+Every register from `address` to `address + naddress` must belong to exactly one channel. A gap is a config error, refused at startup:
+
+```
+write.1 (fuse_settings): register offset 2 (address 0x1002) belongs to no channel. A block write
+sends every register it covers, so this one would go out as a zero nobody asked for -- give it a
+channel, or shorten the block
+```
+
+This is deliberate, and it is the reason there is no read-modify-write. Filling a gap would mean reading the block first and writing it back, and a read-modify-write spread over two frames is not atomic on a bus the device is also being polled on: the poll in between is entitled to see either version, and so is anything else writing to the same device. One function 16 frame either lands whole or does not land at all, and keeping that property is worth refusing a config that cannot have it. If you genuinely need to set a single bit inside a register somebody else owns, that is function 22 (mask write), not this.
+
+Two blocks are not atomic with respect to each other. A device whose settings do not fit in 123 registers is commissioned in more than one frame, and a failure between them leaves it half configured — which the acks will tell you about, but the device will not undo.
+
+#### What to publish
+
+Either a list of values, one per channel in channel order:
+
+```
+mosquitto_pub -t settings/fuse1 -m '63,2,230,100000'
+mosquitto_pub -t settings/fuse1 -m '[63, 2, 230, 100000]'
+```
+
+Comma or whitespace separated, brackets optional — a JSON array of numbers is the same list with punctuation, and refusing it over punctuation helps nobody. The values are in engineering units and are scaled per channel on the way out, so `63` with `mod = -10` reaches the device as `630`.
+
+A list of the wrong length is **rejected, not padded**. A short list would leave the rest of a block that gets written whole filled with whatever the publisher did not say.
+
+Or nothing at all, which writes the values the config already carries:
+
+```
+mosquitto_pub -t settings/fuse1 -m ''
+mosquitto_pub -t settings/fuse1 -m 'default'
+```
+
+That is the commissioning case the block write exists for: the settings live in the file, reviewed and in version control, and publishing anything at all to the topic sends them. It needs every channel to have a `value`; a block missing one says so at startup rather than at the first attempt:
+
+```
+NOTE: write.1 (fuse_settings) is a 5-register block with no complete set of defaults — it takes a
+list of 4 values, an empty payload will not trigger it
+```
+
+#### Limits
+
+- Registers only. A block is function 16; coils are written one at a time.
+- 1 to 123 registers, which is what one function 16 frame carries.
+- `on_value`/`off_value` do not apply — they map a single on/off command.
+- Text formats are read-only here as everywhere else.
+
+### Acknowledgements
+
+A write is queued and the caller is not told what became of it. With `ack` set, `modbusmq` publishes the outcome instead of only logging it:
+
+```
+mqtt.ack            = 1                 # config-wide default, off unless set
+write.N.ack         = 1                 # per entry, overrides the above
+write.N.ack_topic   = settings/fuse1/ack  # optional; defaults to the write topic + "/ack"
+```
+
+The default topic is derived after `mqtt.topic_prefix` has been applied, so an ack lands next to the topic that triggered it whatever namespace that is in. Acks are **never retained** — an ack is something that happened once, and a retained one would be replayed to every subscriber that connects afterwards, telling them a write just succeeded when it succeeded last Tuesday.
+
+The payload is JSON:
+
+```json
+{"status":"ok","name":"fuse_settings","topic":"settings/fuse1","req":42,"value":"63,2,230,100000"}
+```
+
+```json
+{"status":"error","name":"fuse_settings","topic":"settings/fuse1","req":43,"reason":"exception","code":2,"message":"illegal data address"}
+```
+
+| Field | Meaning |
+|---|---|
+| `status` | `ok` or `error` |
+| `name` | `write.N.name`, when the entry has one |
+| `topic` | the write topic this is about — several entries may share one, and each answers for itself |
+| `req` | the library's request id, the same one the log lines carry. **Absent** when the write was refused before it was ever queued, because then there is no request to correlate with |
+| `value` | what was written, on success |
+| `reason` | machine-readable cause, on failure |
+| `code` | Modbus exception code, when the device gave one |
+| `message` | the same cause in words |
+
+`reason` is one of:
+
+| `reason` | What happened |
+|---|---|
+| `payload` | the payload was not usable — wrong value count, not a number, not a command. Never reached the bus, so no `req` |
+| `encode` | a value does not fit its format. Rejected rather than truncated |
+| `offline` | the device is not connected. No `req` |
+| `queue` | the request could not be queued. No `req` |
+| `timeout` | the request went out and nothing came back within `modbusmq.frame_timeout` |
+| `exception` | the device answered, and the answer was no. `code` and `message` name it |
+| `protocol` | a reply came back that was not a valid answer to this request |
+| `transport` | the connection went away with the request still outstanding |
+
+#### What an ack means
+
+The ack reports the device's answer to the write, and nothing else.
+
+`{"status":"ok"}` means the device returned a well-formed echo carrying the function and slave that were asked for — the write was accepted. `modbusmq` writes what it was told to write and reports what came back. It does not read the register afterwards, does not compare, does not retry, and does not decide on the publisher's behalf that the value needs asserting again.
+
+That division is deliberate. Publish `-10` and `-10` goes to the device; the ack says whether the device took it. Whether a device that clamps or rounds its own setpoints needs following up is a question about that device and that application, and the answer belongs where the requirement lives. Poll the register alongside the write if you want to watch it — `config/example4.config` does exactly that — but that is a choice the config makes, not something the write path does behind your back.
+
+An `exception` nack is the useful one. `illegal data address` says the register is not there, `illegal data value` says the value is not allowed, `slave device busy` says try again later — all three are answers, and all three used to arrive as a generic frame rejection two seconds later when the request timed out.
 
 ### Example
 
@@ -643,8 +788,9 @@ Publishing `25.5` to `settings/compressor_on_temperature` writes `0x00FF` (255) 
 
 - **Do not retain command topics.** A retained payload is replayed by the broker every time we subscribe, including after every reconnect, so a retained setpoint gets rewritten to the device on each one. This is the publisher's setting, not something the config can override.
 - **Writes need MQTT.** Without `mqtt.connect`, or in a build without `--enable-mqtt`, write entries are parsed and warned about but can never fire.
-- **Several entries may share a topic**, and one publish then fires all of them. Deliberate, but easy to do by accident with placeholder topics.
-- `mqtt.topic_prefix` applies to write topics as well as published ones.
+- **Several entries may share a topic**, and one publish then fires all of them. Deliberate, but easy to do by accident with placeholder topics. Each entry acks separately, under its own `ack_topic`.
+- `mqtt.topic_prefix` applies to write topics as well as published ones, and to ack topics.
+- **There is no retry.** A write is attempted once; a failure is reported, not repeated. Re-publishing is the publisher's decision to make, since only it knows whether the value is still the one it wants.
 
 ---
 
@@ -656,6 +802,7 @@ mqtt.connect      = mqtt://localhost:1883
 mqtt.topic_prefix = factory/line1/     # prepended to every channel topic
 mqtt.retain       = 1                  # default retain flag, 1/0 true/false yes/no
 mqtt.qos          = 0                  # default QoS, 0, 1 or 2
+mqtt.ack          = 0                  # default for write.N.ack; see Acknowledgements
 ```
 
 ### retain and qos
@@ -761,10 +908,10 @@ mqtt.connect = mqtt://localhost:1883
 
 ## Common pitfalls
 
-- **A repeated key takes its last value**, except `input.max`, `write.max` and `input.N.channel.max`, which are an error.
-- **`write.max` must appear before any `write.N.*` key**, and a `write.N` beyond `write.max` is a hard error rather than a silent skip.
+- **A repeated key takes its last value**, except `input.max`, `write.max`, `input.N.channel.max` and `write.N.channel.max`, which are an error.
+- **`write.max` must appear before any `write.N.*` key**, and a `write.N` beyond `write.max` is a hard error rather than a silent skip. The same goes for `write.N.channel.max` before any `write.N.channel.M.*` key — a channel quietly dropped from a block would leave a register with nothing in it, and the block is written whole.
 - **`input.max` must appear before any `input.N.*` key.** Same for `input.N.channel.max` before channel keys. The parser allocates memory when it sees these declarations; later keys that reference out-of-range indices are silently skipped.
 - **`input.query_mode` must appear before `input.N.*` keys** for the mode to take effect when building the timer list.
 - **Hex addresses** (`0x0FFF`) work in address fields.
-- **Byte offset vs register offset**: for a register block `channel.offset` is in bytes — register 3 of a 2-byte-per-register response is at byte offset 6. For a `coil` or `discrete_input` block it is a coil index instead, because a bit has no byte offset of its own.
+- **Byte offset vs register offset**: for a register block `channel.offset` is in bytes — register 3 of a 2-byte-per-register response is at byte offset 6. For a `coil` or `discrete_input` block it is a coil index instead, because a bit has no byte offset of its own. A block write's `write.N.channel.M.offset` counts bytes too, from the start of the block.
 - **A dropped write is reported, not silent.** If the Modbus link goes down with requests still queued, each one is logged and passed to the error callback rather than discarded quietly.

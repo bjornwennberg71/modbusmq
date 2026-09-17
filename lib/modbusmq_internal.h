@@ -85,6 +85,14 @@ typedef struct modbusmq_cb_t
     int       (*modbusmq_frame_slave)     (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_function)  (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_error_code)(struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+    int       (*modbusmq_frame_exception)( struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+                                          // ...and whether that exception is
+                                          // an answer to this request rather
+                                          // than a late one for another. The
+                                          // fields that establish it are the
+                                          // transport's own, which is why this
+                                          // is not one comparison in the FSM.
+    int       (*modbusmq_msg_exception)(   struct modbusmq_context_t *context, struct modbusmq_msg_t *msg);
     int       (*modbusmq_frame_addr)      (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_naddr)     (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_nbytes)    (struct modbusmq_context_t *context, modbusmq_frame_t *frame);

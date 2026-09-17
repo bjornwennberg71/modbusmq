@@ -44,9 +44,9 @@ typedef enum modbusmq_type_e
 // codes themselves, the same way modbusmq_type_e carries 0x03/0x04.
 //
 // Only single-coil (05) and single/multiple register (06/16) writes are
-// offered. Function 15, write multiple coils, is deliberately absent: one
-// write entry addresses one thing, so there is never more than one coil to
-// set, and 15 buys nothing but a bit-packing order to get wrong.
+// offered. Function 15, write multiple coils, is deliberately absent: a block
+// write entry lays out registers, no device so far has wanted a run of coils
+// set in one go, and 15 buys nothing but a bit-packing order to get wrong.
 //
 typedef enum modbusmq_write_function_e
 {
@@ -55,6 +55,12 @@ typedef enum modbusmq_write_function_e
     modbusmq_write_function_register  = 0x06,
     modbusmq_write_function_registers = 0x10
 } modbusmq_write_function_e;
+
+//
+// Appended to a write topic to make its ack topic, when the config does not
+// name one itself.
+//
+#define MODBUSMQ_ACK_SUFFIX               "/ack"
 
 #define MODBUSMQ_FUNCTION_WRITE_COIL      "write_coil"
 #define MODBUSMQ_FUNCTION_WRITE_REGISTER  "write_register"
@@ -302,6 +308,39 @@ typedef struct modbusmq_input_t
 } modbusmq_input_t;
 
 //
+// One field inside a block write.
+//
+// The mirror of modbusmq_channel_t, kept as its own type rather than reused:
+// a channel carries publish policy and publish state, and a write has neither.
+// What it does carry that an input channel does not is a default value, which
+// is what makes the trigger form of a block write possible.
+//
+// offset is in bytes from the start of the block, counted the same way an
+// input channel counts them, so a register at block offset 2 is byte 4.
+//
+typedef struct modbusmq_write_channel_t
+{
+    char               *name;    // for the log and the nack detail; optional
+    int                 offset;  // bytes into the block
+    int                 format;
+    int                 length;  // bytes, derived from format
+
+                                 // Scaling, undone on the way out exactly as
+                                 // modbusmq_write_t does it.
+    int                 add;
+    int                 mod;
+    int                 mul;
+
+                                 // The value written when the payload is a
+                                 // trigger rather than a list. This is the
+                                 // "initial settings" case: the numbers live
+                                 // in the config, and publishing anything at
+                                 // all to the topic sends them.
+    double              value;
+    uint8_t             has_value;
+} modbusmq_write_channel_t;
+
+//
 // One MQTT topic that writes to the device.
 //
 // The mirror image of an input: instead of polling a register and publishing
@@ -346,6 +385,37 @@ typedef struct modbusmq_write_t
     uint8_t             has_off_value;
 
     char               *topic;    // subscribed, never published
+
+                                  // Block write (function 16 over more than
+                                  // one value). naddress is the block length
+                                  // in registers and channels describes what
+                                  // sits where inside it. Both unset is the
+                                  // single-value shape every config before
+                                  // 2.5.0 used, and that shape still works
+                                  // unchanged: format/add/mod/mul on the entry
+                                  // itself, one value per message.
+    int                 naddress;
+    uint8_t             has_naddress;
+    int                 channel_max;
+    modbusmq_write_channel_t *channels;
+
+                                  // Every channel carries a value, so the
+                                  // block can be written from the config
+                                  // alone. Worked out once by the validator:
+                                  // the runtime should not have to walk the
+                                  // channels to find out whether a trigger
+                                  // payload is answerable.
+    uint8_t             has_defaults;
+
+                                  // Publish an ack or a nack for this write.
+                                  // Unset takes mqtt.ack, which is off — an
+                                  // existing deployment gains no new traffic
+                                  // by upgrading. ack_topic defaults to the
+                                  // write topic with "/ack" appended, after
+                                  // mqtt.topic_prefix has been applied.
+    int                 ack;
+    uint8_t             has_ack;
+    char               *ack_topic;
 } modbusmq_write_t;
     
 
@@ -379,6 +449,9 @@ typedef struct modbusmq_config_t
     char               *mqtt_topic_prefix;
     int                 mqtt_retain; // default for every published channel
     int                 mqtt_qos;
+                                   // Config-wide default for write.N.ack. Off,
+                                   // so acks are something a config asks for.
+    int                 mqtt_ack;
 
                                    // Config-wide defaults for the publish
                                    // rate-limiting keys, the bottom rung under

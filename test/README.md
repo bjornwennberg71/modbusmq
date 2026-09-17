@@ -34,10 +34,10 @@ real code path. Exit status is 0 only if every check passed.
 
 | file | what it covers | needs a server |
 | --- | --- | --- |
-| `test_scaling.c` | decoders and encoders and their round trips, connect string parsing, `modbusmq_strerror`, `modbusmq_channel_format_value`, the publish policy, `modbusmq_write_encode` | no |
+| `test_scaling.c` | decoders and encoders and their round trips, connect string parsing, `modbusmq_strerror`, `modbusmq_channel_format_value`, the publish policy, `modbusmq_write_encode`, `modbusmq_write_encode_block`, `modbusmq_exception_string` | no |
 | `test_read.c` | all four input types end to end: framing, transport, response validation, byte order, scaling | yes |
 | `test_loop.c` | `modbusmq_loop_prepare`/`modbusmq_loop_write_read`, subscriptions and callbacks, one-shot posts, the `sleep_time` in/out contract, teardown | yes |
-| `run_tests.sh` | the above, plus the command line: `modbusmq_query` round trip, `--version` agreeing with the header, and `-e` override behaviour | — |
+| `run_tests.sh` | the above, plus config validation (block write layout: gaps, overlaps, offsets) and the command line: `modbusmq_query` round trip, `--version` agreeing with the header, and `-e` override behaviour | — |
 | `run_matrix.sh` | builds and runs all of it with `MQTT_ENABLED` off and on, failing on any compiler warning | — |
 
 `test_common.h` is the whole framework: four `CHECK_*` macros and a tally. A

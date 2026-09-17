@@ -254,6 +254,49 @@ EOF
     fi
 }
 
+#
+# The counterpart: assert a config is ACCEPTED, so the refusals above cannot be
+# satisfied by a validator that refuses everything put in front of it.
+#
+# "Accepted" means it got past validation, which shows up as the bridge trying
+# to reach a device rather than complaining about the file. Nothing is
+# listening on $PORT+1, and that is the point -- the connect attempt is the
+# evidence.
+#
+good_config()
+{
+    local what=$1 body=$2
+    local f="$TMP/good.config"
+
+    cat > "$f" <<EOF
+config.name      = good
+config.version   = 2.0
+modbusmq.connect = tcp://localhost:$((PORT + 1))
+
+input.max = 1
+input.1.slave       = 1
+input.1.type        = holding_register
+input.1.address     = 0x0200
+input.1.naddress    = 8
+input.1.interval    = 1000
+input.1.channel.max = 1
+input.1.channel.1.offset = 0
+input.1.channel.1.topic  = t/good
+input.1.channel.1.format = uint_ab
+$body
+EOF
+
+    local out
+    out=$(timeout 5 "$BRIDGE" -c "$f" 2>&1)
+
+    if echo "$out" | grep -qE "Unable to parse config-file"; then
+        bad "$what (config was refused)"
+        echo "$out" | sed 's/^/    /' | head -5
+    else
+        ok "$what"
+    fi
+}
+
 # a variable-width text format has no size of its own
 bad_config "ascii without a length is rejected" "needs length" \
     "input.1.channel.1.format = ascii_ab"
@@ -293,6 +336,114 @@ write.1.type   = holding_register
 write.1.address = 0x0300
 write.1.format = ascii_ab
 write.1.topic  = t/set"
+
+#
+# Block writes. A block goes out as one function 16 frame covering every
+# register it spans, so the config has to account for every one of them --
+# these are the ways of failing to.
+#
+# The header stops at channel.max on purpose: it allocates the channel array,
+# so the channel.M lines below it only parse once it has been seen.
+#
+BLOCK_HEAD="write.max = 1
+write.1.name    = blk
+write.1.slave   = 1
+write.1.type    = holding_register
+write.1.address = 0x1000
+write.1.topic   = t/blk
+write.1.channel.max = 2"
+
+# register 1 is spanned by the block but claimed by nobody, and would go out
+# as a zero nobody asked for
+bad_config "a gap in a block write is rejected" "belongs to no channel" \
+    "$BLOCK_HEAD
+write.1.naddress = 3
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.2.offset = 4
+write.1.channel.2.format = uint_ab"
+
+# the 32-bit channel already covers register 1
+bad_config "two channels on one register are rejected" "already claimed by another channel" \
+    "$BLOCK_HEAD
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_abcd
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab"
+
+# offset counts bytes, so a register boundary is an even one
+bad_config "an odd channel offset is rejected" "not on a register boundary" \
+    "$BLOCK_HEAD
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.2.offset = 3
+write.1.channel.2.format = uint_ab"
+
+# the registers of a block are different things, so the entry cannot carry one
+# format and one scaling for all of them
+bad_config "format/mod on a block write entry is rejected" "belong on write.1.channel.M" \
+    "$BLOCK_HEAD
+write.1.format = uint_ab
+write.1.mod    = -10
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab"
+
+# ...and the reverse: a block length with nothing laying the block out
+bad_config "naddress without channels is rejected" "naddress describes a block" \
+    "write.max = 1
+write.1.name    = blk
+write.1.slave   = 1
+write.1.type    = holding_register
+write.1.address = 0x1000
+write.1.topic   = t/blk
+write.1.format  = uint_ab
+write.1.naddress = 2"
+
+# function 16 writes registers; there is no block form for coils
+bad_config "a coil block write is rejected" "coils are written one at a time" \
+    "write.max = 1
+write.1.name    = blk
+write.1.slave   = 1
+write.1.type    = coil
+write.1.address = 0x1000
+write.1.topic   = t/blk
+write.1.channel.max = 2
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab"
+
+# a block channel scales a number, and a serial number is not one
+bad_config "a text format in a block write channel is rejected" "write.1.channel.1.*read but not written" \
+    "$BLOCK_HEAD
+write.1.channel.1.offset = 0
+write.1.channel.1.format = ascii_ab
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab"
+
+# ...and a block that is laid out correctly is accepted. Three channels, the
+# last a 4-byte format spanning two registers, every register claimed exactly
+# once, naddress left for the channels to settle.
+good_config "a correctly laid out block write is accepted" \
+    "$BLOCK_HEAD
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.1.mod    = -10
+write.1.channel.1.value  = 63
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_abcd
+write.1.channel.2.value  = 100000"
+
+# an ack topic is derived rather than required
+good_config "a block write with acks is accepted" \
+    "mqtt.ack = 1
+$BLOCK_HEAD
+write.1.channel.1.offset = 0
+write.1.channel.1.format = uint_ab
+write.1.channel.2.offset = 2
+write.1.channel.2.format = uint_ab"
 
 echo
 echo "--------------------------------"

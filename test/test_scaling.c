@@ -139,6 +139,8 @@ test_strerror(void)
               "strerror PROTOCOL");
     CHECK_STR(modbusmq_strerror(MODBUSMQ_ERR_TIMEOUT),   "no response within frame timeout",
               "strerror TIMEOUT");
+    CHECK_STR(modbusmq_strerror(MODBUSMQ_ERR_EXCEPTION), "device returned a Modbus exception",
+              "strerror EXCEPTION");
 
     // an errno still falls through to the C library
     CHECK_STR(modbusmq_strerror(ENOENT), strerror(ENOENT), "strerror falls through to errno");
@@ -146,6 +148,29 @@ test_strerror(void)
     // and never returns NULL, whatever it is handed
     CHECK(modbusmq_strerror(0)     != NULL, "strerror(0) is not null");
     CHECK(modbusmq_strerror(-9999) != NULL, "strerror(unknown) is not null");
+}
+
+//
+// modbusmq_exception_string: the codes the specification defines, and a
+// number for everything else
+//
+static void
+test_exception_string(void)
+{
+    printf("exception_string\n");
+
+    CHECK_STR(modbusmq_exception_string(1), "illegal function",     "exception 1");
+    CHECK_STR(modbusmq_exception_string(2), "illegal data address", "exception 2");
+    CHECK_STR(modbusmq_exception_string(3), "illegal data value",   "exception 3");
+    CHECK_STR(modbusmq_exception_string(6), "slave device busy",    "exception 6");
+
+    // a vendor code above the specified range is real and worth passing on as
+    // a number, but naming it would be inventing a meaning
+    CHECK_STR(modbusmq_exception_string(99), "unknown exception", "unknown exception code");
+
+    // the caller prints this straight into a log line, so it never returns null
+    CHECK(modbusmq_exception_string(0)  != NULL, "exception_string(0) is not null");
+    CHECK(modbusmq_exception_string(-1) != NULL, "exception_string(negative) is not null");
 }
 
 //
@@ -296,6 +321,104 @@ test_write_encode(void)
     modbusmq_free(context);
 }
 
+//
+// modbusmq_write_encode_block: one function 16 frame laid out from the
+// channels, either from a payload or from the values the config carries
+//
+static void
+test_write_encode_block(void)
+{
+    printf("write_encode_block\n");
+
+    struct modbusmq_context_t *context = modbusmq_tcp_context("tcp://localhost:1");
+    CHECK(context != NULL, "context allocated without connecting");
+    if (!context)
+    {
+        return;
+    }
+
+    modbusmq_write_channel_t
+        channels[3];
+    modbusmq_write_t
+        write;
+    char
+        name[] = "blk";
+    uint16_t
+        regs[8],
+        trigger[8];
+
+    memset(channels, 0, sizeof(channels));
+    memset(&write,   0, sizeof(write));
+
+    // tenths of a unit in one register: mod -10 divides on read, so the write
+    // multiplies back up
+    channels[0].offset    = 0;
+    channels[0].format    = modbusmq_data_format_ab;
+    channels[0].length    = 2;
+    channels[0].mod       = -10;
+    channels[0].value     = 63;
+    channels[0].has_value = 1;
+
+    channels[1].offset    = 2;
+    channels[1].format    = modbusmq_data_format_ab;
+    channels[1].length    = 2;
+    channels[1].value     = 2;
+    channels[1].has_value = 1;
+
+    // offset counts bytes, so this one starts at register 2 and takes two
+    channels[2].offset    = 4;
+    channels[2].format    = modbusmq_data_format_abcd;
+    channels[2].length    = 4;
+    channels[2].value     = 100000;
+    channels[2].has_value = 1;
+
+    write.name         = name;
+    write.slave        = 1;
+    write.type         = modbusmq_type_holding_register;
+    write.function     = modbusmq_write_function_registers;
+    write.address      = 0x1000;
+    write.has_address  = 1;
+    write.naddress     = 4;
+    write.has_naddress = 1;
+    write.channel_max  = 3;
+    write.channels     = channels;
+    write.has_defaults = 1;
+
+    const double
+        values[3] = { 63.0, 2.0, 100000.0 };
+
+    memset(regs, 0xFF, sizeof(regs));
+    CHECK_INT(modbusmq_write_encode_block(context, &write, values, 3, regs, 8), 4,
+              "block encode returns the block length");
+    CHECK_INT(regs[0], 630,   "mod -10 scales 63 back up to 630");
+    CHECK_INT(regs[1], 2,     "the second channel lands in its own register");
+    CHECK_INT(regs[2], 1,     "abcd puts the high word first");
+    CHECK_INT(regs[3], 34464, "abcd low word");
+
+    // the trigger form: nothing in the payload, everything from the config
+    memset(trigger, 0xFF, sizeof(trigger));
+    CHECK_INT(modbusmq_write_encode_block(context, &write, NULL, -1, trigger, 8), 4,
+              "trigger form encodes from the configured values");
+    CHECK(memcmp(regs, trigger, 4 * sizeof(regs[0])) == 0,
+          "the defaults encode exactly as passing the same values explicitly");
+
+    // a block is written whole, so a short payload is a skipped write and not
+    // a partial one
+    CHECK(modbusmq_write_encode_block(context, &write, values, 2, regs, 8) < 0,
+          "a payload of the wrong length is refused");
+
+    // ...and a channel with no default leaves a hole the trigger form cannot fill
+    channels[1].has_value = 0;
+    CHECK(modbusmq_write_encode_block(context, &write, NULL, -1, trigger, 8) < 0,
+          "trigger form refused when a channel has no value to fall back on");
+    channels[1].has_value = 1;
+
+    CHECK(modbusmq_write_encode_block(context, &write, values, 3, regs, 3) < 0,
+          "too little room for the block is refused");
+
+    modbusmq_free(context);
+}
+
 int
 main(void)
 {
@@ -305,9 +428,11 @@ main(void)
     test_encoders();
     test_connect_string();
     test_strerror();
+    test_exception_string();
     test_format_value();
     test_publish_decide();
     test_write_encode();
+    test_write_encode_block();
 
     return test_summary("test_scaling");
 }

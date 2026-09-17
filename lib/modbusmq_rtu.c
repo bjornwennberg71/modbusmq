@@ -100,6 +100,8 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
         .modbusmq_frame_slave      = modbusmq_rtu_frame_slave,
         .modbusmq_frame_function   = modbusmq_rtu_frame_function,
         .modbusmq_frame_error_code = modbusmq_rtu_frame_error_code,
+        .modbusmq_frame_exception  = modbusmq_rtu_frame_exception,
+        .modbusmq_msg_exception    = modbusmq_rtu_msg_exception,
         .modbusmq_frame_addr       = modbusmq_rtu_frame_addr,
         .modbusmq_frame_naddr      = modbusmq_rtu_frame_naddr,
         .modbusmq_frame_nbytes     = modbusmq_rtu_frame_nbytes,
@@ -799,6 +801,70 @@ modbusmq_rtu_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
     default:
         return -1;
     }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// 
+// response error code
+// internal function
+int
+modbusmq_rtu_frame_exception( modbusmq_context_t *context, modbusmq_frame_t *frame)
+{
+    (void)context;
+    //
+    // slave(1) + function|0x80(1) + code(1), so three bytes is what it takes
+    // for buf[2] to be the exception code. The CRC that follows is checked
+    // where the frame is checked; a code is worth reporting either way, and
+    // the alternative is a nack that says only "something was rejected".
+    //
+    if (frame->is_writer || frame->xmit < 3)
+    {
+        return 0;
+    }
+
+    if (!(frame->buf[1] & 0x80))
+    {
+        return 0;
+    }
+
+    return frame->buf[2];
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// 
+// Is the response an exception reply to this request?
+//
+// internal function
+//
+// RTU has no transaction id, so the slave and the function under the exception
+// bit are all there is to go on -- which is the same pair every other RTU
+// response is matched on.
+//
+int
+modbusmq_rtu_msg_exception( modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    modbusmq_frame_t
+        *writer = &msg->frame[0],
+        *reader = &msg->frame[1];
+    int
+        code = modbusmq_rtu_frame_exception(context, reader);
+
+    if (code <= 0)
+    {
+        return 0;
+    }
+
+    if (reader->buf[0] != writer->buf[0])
+    {
+        return 0; // another slave
+    }
+
+    if ((reader->buf[1] & 0x7f) != writer->buf[1])
+    {
+        return 0; // an exception, but not to the function we asked for
+    }
+
+    return code;
 }
 
 //////////////////////////////////////////////////////////////////////////////

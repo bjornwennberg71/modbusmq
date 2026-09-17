@@ -16,7 +16,7 @@
 // DEFINES ///////////////////////////////////////////////////////////////////
 
 #define MODBUSMQ_VERSION_MAJOR 2
-#define MODBUSMQ_VERSION_MINOR 4
+#define MODBUSMQ_VERSION_MINOR 5
 #define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
@@ -50,9 +50,23 @@
 // functions never return it, since a timed-out request is dropped and the queue
 // simply moves on.
 //
+// MODBUSMQ_ERR_EXCEPTION means the device answered in time and in good order,
+// to say no: the reply carries the function code with the exception bit set,
+// and an exception code saying why. Nothing is wrong with the link or the
+// stream, so like MODBUSMQ_ERR_TIMEOUT it is reported through the error
+// callback only. The loop functions keep returning MODBUSMQ_ERR_PROTOCOL for
+// it, because what has to happen to the stream is the same either way — the
+// distinction is about the request, not the connection.
+//
+// The exception code itself is a third namespace and does not fit in this one.
+// Read it off the response frame with modbusmq_frame_exception_code() and name
+// it with modbusmq_exception_string(); the frame is valid for as long as the
+// callback runs.
+//
 #define MODBUSMQ_ERR_TRANSPORT (-1)
 #define MODBUSMQ_ERR_PROTOCOL  (-2)
 #define MODBUSMQ_ERR_TIMEOUT   (-3)
+#define MODBUSMQ_ERR_EXCEPTION (-4)
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,6 +76,7 @@ extern "C" {
 struct modbusmq_input_t;
 struct modbusmq_channel_t;
 struct modbusmq_write_t;
+struct modbusmq_write_channel_t;
 
 //
 // contains data to send or receive
@@ -153,7 +168,8 @@ extern int  modbusmq_get_debug(void);
 // Describes either a MODBUSMQ_ERR_* code or an errno — the library's codes are
 // negative and an errno is not, so one function covers both without ambiguity.
 // Modbus exception codes from a device are a separate namespace and are not
-// handled here; read those with modbusmq_frame_error_code().
+// handled here; read those with modbusmq_frame_exception_code() and name them
+// with modbusmq_exception_string().
 //
 extern const char *modbusmq_strerror(int nerrno);
 
@@ -206,6 +222,23 @@ extern int         modbusmq_frame_naddr(         struct modbusmq_context_t *cont
     //
 extern int         modbusmq_frame_nbytes(        struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int         modbusmq_frame_error_code(    struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+
+    //
+    // The exception code of a response, guarded. Returns 1..255 only when the
+    // frame really is a complete exception reply, and 0 for anything else.
+    //
+    // This is the one to call from an error callback.
+    // modbusmq_frame_error_code() reads the byte at the exception code's
+    // offset whatever is there, and a write echo or a half-read frame has
+    // something else at that offset that looks just as much like a code.
+    //
+extern int         modbusmq_frame_exception_code(struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+
+    //
+    // Names a Modbus exception code: "illegal data address" for 2. Never 0;
+    // an unknown code comes back as "unknown exception".
+    //
+extern const char *modbusmq_exception_string(int code);
 
 //
 // "[req 4711 slave 3 addr 0x01F4]" — the prefix every error line starts with,
@@ -326,6 +359,25 @@ extern int   modbusmq_format_size(int format);
     // Returns the register count (1 or 2), < 0 on error. Not for coil writes.
     //
 extern int   modbusmq_write_encode(struct modbusmq_context_t *context, const struct modbusmq_write_t *write, double value, uint16_t *regs);
+    //
+    // The same thing for one channel of a block write, which carries its own
+    // format and scaling rather than the write entry's.
+    // Returns the register count (1 or 2), < 0 on error.
+    //
+extern int   modbusmq_write_channel_encode(struct modbusmq_context_t *context, const struct modbusmq_write_t *write, const struct modbusmq_write_channel_t *channel, double value, uint16_t *regs);
+    //
+    // Lay a whole block of values out as the registers of one function 16
+    // write. values holds one engineering-unit value per channel, in channel
+    // order; pass nvalues < 0 to take each channel's configured default
+    // instead. regs must hold write->naddress registers.
+    //
+    // Every register of the block is written, so the caller never has to think
+    // about what happens to the ones no channel claims: the config validator
+    // has already refused a block with a gap in it.
+    //
+    // Returns the register count, < 0 on error.
+    //
+extern int   modbusmq_write_encode_block(struct modbusmq_context_t *context, const struct modbusmq_write_t *write, const double *values, int nvalues, uint16_t *regs, int nregs);
 
 extern void  modbusmq_write_int16_ab(uint8_t *data, uint16_t value);
 extern void  modbusmq_write_int32_abcd(uint8_t *data, uint32_t value);

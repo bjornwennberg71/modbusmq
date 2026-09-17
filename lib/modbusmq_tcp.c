@@ -119,6 +119,8 @@ modbusmq_tcp_context(const char *pzConnectString)
         .modbusmq_frame_slave      = modbusmq_tcp_frame_slave,
         .modbusmq_frame_function   = modbusmq_tcp_frame_function,
         .modbusmq_frame_error_code = modbusmq_tcp_frame_error_code,
+        .modbusmq_frame_exception  = modbusmq_tcp_frame_exception,
+        .modbusmq_msg_exception    = modbusmq_tcp_msg_exception,
         .modbusmq_frame_addr       = modbusmq_tcp_frame_addr,
         .modbusmq_frame_naddr      = modbusmq_tcp_frame_naddr,
         .modbusmq_frame_nbytes     = modbusmq_tcp_frame_nbytes,
@@ -717,6 +719,77 @@ modbusmq_tcp_frame_nbytes(modbusmq_context_t *context, modbusmq_frame_t *frame)
 // return error code. If function res[7] >= 0x80, then the following byte is the
 // error-code
 // 
+int
+modbusmq_tcp_frame_exception( modbusmq_context_t *context, modbusmq_frame_t *frame)
+{
+    (void)context;
+    //
+    // A request carries no exception, and the code sits one byte past the
+    // function, so both have to have arrived before buf[8] is the code rather
+    // than whatever the buffer held before this read.
+    //
+    if (frame->is_writer || frame->xmit < 9)
+    {
+        return 0;
+    }
+
+    if (!(frame->buf[7] & 0x80))
+    {
+        return 0;
+    }
+
+    return frame->buf[8];
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Is the response an exception reply to this request?
+//
+// internal function
+//
+// A late exception for a request already abandoned looks the same as one for
+// this request, and stepping over the first is right while giving up on the
+// second is. The MBAP transaction id settles it; the unit id and the function
+// under the exception bit are checked too, since a gateway is entitled to
+// reuse a transaction id it has finished with.
+//
+int
+modbusmq_tcp_msg_exception( modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    modbusmq_frame_t
+        *writer = &msg->frame[0],
+        *reader = &msg->frame[1];
+    int
+        code = modbusmq_tcp_frame_exception(context, reader);
+
+    if (code <= 0)
+    {
+        return 0;
+    }
+
+    if (reader->buf[0] != writer->buf[0] ||
+        reader->buf[1] != writer->buf[1])
+    {
+        return 0; // another request's transaction
+    }
+
+    if (reader->buf[6] != writer->buf[6])
+    {
+        return 0; // another unit
+    }
+
+    if ((reader->buf[7] & 0x7f) != writer->buf[7])
+    {
+        return 0; // an exception, but not to the function we asked for
+    }
+
+    return code;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// response error code
+// internal function
 int
 modbusmq_tcp_frame_error_code( modbusmq_context_t *context, modbusmq_frame_t *frame)
 {

@@ -347,6 +347,35 @@ else if (rc < 0)
 that went out and got nothing back within the frame timeout is simply dropped and
 the queue moves on; you hear about it through the error callback only.
 
+`MODBUSMQ_ERR_EXCEPTION` is the same kind of code: error callback only. It means
+the device answered, in time and in good order, to say no — the reply carries the
+function code with the exception bit set and an exception code giving the reason.
+The loop functions report it as `MODBUSMQ_ERR_PROTOCOL`, because what a caller
+has to do about the stream is identical either way and the distinction is about
+the request, not the connection. So an existing `if (rc == MODBUSMQ_ERR_PROTOCOL)`
+keeps working unchanged; what changes is that the error callback can now tell a
+refusal apart from a corrupt frame:
+
+```c
+void on_error(struct modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
+{
+    if (error == MODBUSMQ_ERR_EXCEPTION)
+    {
+        int code = modbusmq_frame_exception_code(context, &msg->frame[1]);
+
+        fprintf(stderr, "%s device refused it: %s (%d)\n",
+                modbusmq_msg_tag(context, msg), modbusmq_exception_string(code), code);
+        return;
+    }
+
+    fprintf(stderr, "%s %s\n", modbusmq_msg_tag(context, msg), modbusmq_strerror(error));
+}
+```
+
+An exception reply also ends the request there and then. It used to be stepped
+over as if it were a late frame for somebody else, leaving the request to die of
+the frame timeout seconds later and report the wrong reason for it.
+
 `modbusmq_reset_queue()` on a lost connection matters: it clears requests that
 were mid-flight so the reconnected stream does not start by trying to finish a
 transaction the device never heard.
@@ -368,7 +397,11 @@ describes it — the library's codes are negative and an `errno` is not, so the
 sign picks the namespace and one call covers both. Modbus exception codes
 reported by a device are a third namespace (small positive numbers that would
 collide with `errno`) and are not handled there; read those with
-`modbusmq_frame_error_code()`.
+`modbusmq_frame_exception_code()`, which returns the code only when the frame
+really is a complete exception reply and 0 otherwise, and name them with
+`modbusmq_exception_string()`. (`modbusmq_frame_error_code()` still exists and
+reads the byte at the code's offset whatever is there, which is only safe once
+you already know the frame is an exception.)
 
 ---
 
@@ -400,6 +433,14 @@ result into the text to print or publish, and `modbusmq_channel_publish_decide()
 applies the channel's publish policy. Those four are what the `modbusmq` program
 is built out of; a program with its own idea of what to do with a value can
 ignore them and read the bytes directly.
+
+`modbusmq_write_encode_block()` does the same for a whole block: it takes one
+value per `write.N.channel.M`, scales each by that channel's own `add`/`mod`/`mul`
+and lays the results out as the registers of one function 16 frame. Pass a
+negative count to use the channels' configured defaults instead of a value list.
+Every register of the block is written — the config validator has already refused
+a block with a gap in it, so there is no partially specified block to reason
+about and no read-modify-write to make atomic.
 
 On the way out, `modbusmq_write_encode()` is the exact inverse of
 `modbusmq_read_channel()`: it undoes a write entry's `add`/`mod`/`mul` and

@@ -385,6 +385,32 @@ modbusmq_report_error(modbusmq_context_t *context, modbusmq_msg_t *msg, int erro
 
 /**
  *
+ * @brief tell a rejected frame apart from a device that answered "no"
+ *
+ * Both arrive here the same way — modbusmq_check() refuses the response and
+ * the stream is resynced — but they are not the same event. A corrupt frame
+ * says something is wrong with the wiring; an exception reply says the device
+ * heard the request perfectly well and declined it, and the caller writing a
+ * setpoint needs to know which of the two it is looking at.
+ *
+ * @param context: allocated context
+ * @param msg: the message whose response was refused
+ *
+ * @return MODBUSMQ_ERR_EXCEPTION or MODBUSMQ_ERR_PROTOCOL
+ */
+static int
+modbusmq_reject_reason(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    if (context->cb.modbusmq_msg_exception(context, msg) > 0)
+    {
+        return MODBUSMQ_ERR_EXCEPTION;
+    }
+
+    return MODBUSMQ_ERR_PROTOCOL;
+}
+
+/**
+ *
  * @brief connects to the device specified in the context
  * 
  * @param context: allocated context
@@ -512,6 +538,8 @@ modbusmq_strerror(int nerrno)
         return "frame rejected, stream resynced";
     case MODBUSMQ_ERR_TIMEOUT:
         return "no response within frame timeout";
+    case MODBUSMQ_ERR_EXCEPTION:
+        return "device returned a Modbus exception";
     default:
         break;
     }
@@ -2117,7 +2145,7 @@ modbusmq_encode_text(const modbusmq_channel_t *channel, const char *text, uint8_
 
 /**
  *
- * @brief undo a write entry's scaling and encode the result as Modbus registers
+ * @brief undo one set of add/mod/mul and encode the result as Modbus registers
  *
  * The exact inverse of modbusmq_read_channel(), applied in reverse order: that
  * function computes (raw + add), then mod, then mul, so this one undoes mul,
@@ -2140,17 +2168,12 @@ modbusmq_encode_text(const modbusmq_channel_t *channel, const char *text, uint8_
  *
  * @return number of registers to write (1 or 2), < 0 on error
  */
-int
-modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write, double value, uint16_t *regs)
+static int
+modbusmq_encode_scaled(modbusmq_context_t *context, const char *name,
+                       int format, int add, int mod, int mul,
+                       double value, uint16_t *regs)
 {
-    if (!context || !write || !regs)
-    {
-        errno = EINVAL;
-        return -1;
-    }
-
-    const char
-        *name = write->name ? write->name : (write->topic ? write->topic : "?");
+    (void)context;
 
     if (!isfinite(value))
     {
@@ -2164,32 +2187,32 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
     double
         raw = value;
 
-    if (write->mul != 0)
+    if (mul != 0)
     {
-        raw /= write->mul;
+        raw /= mul;
     }
-    if (write->mod > 0)
+    if (mod > 0)
     {
-        raw /= write->mod;
+        raw /= mod;
     }
-    else if (write->mod < 0)
+    else if (mod < 0)
     {
-        raw *= -(double)write->mod;
+        raw *= -(double)mod;
     }
-    raw -= write->add;
+    raw -= add;
 
     int
-        is_float = (write->format == modbusmq_data_format_float_abcd ||
-                    write->format == modbusmq_data_format_float_badc ||
-                    write->format == modbusmq_data_format_float_dcba ||
-                    write->format == modbusmq_data_format_float_cdab);
+        is_float = (format == modbusmq_data_format_float_abcd ||
+                    format == modbusmq_data_format_float_badc ||
+                    format == modbusmq_data_format_float_dcba ||
+                    format == modbusmq_data_format_float_cdab);
 
     if (!is_float)
     {
         double
             lo, hi;
 
-        switch (write->format)
+        switch (format)
         {
         case modbusmq_data_format_int8:
             lo = -128.0;        hi = 127.0;
@@ -2246,11 +2269,11 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
     uint8_t
         buf[4] = {0};
     int
-        nbytes = modbusmq_encode_value(write->format, raw, buf);
+        nbytes = modbusmq_encode_value(format, raw, buf);
 
     if (nbytes != 2 && nbytes != 4)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: format %d cannot be written\n", name, (int)write->format);
+        modbusmq_logf(LOG_ERROR, "write %s: format %d cannot be written\n", name, (int)format);
         return -1;
     }
 
@@ -2266,6 +2289,215 @@ modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write
     }
 
     return nbytes / 2;
+}
+
+
+/**
+ *
+ * @brief undo a write entry's scaling and encode the result as Modbus registers
+ *
+ * The single-value shape: the write entry itself carries the format and the
+ * scaling, and one MQTT message sets one register or one pair of them.
+ *
+ * @param context: allocated context (for logging only)
+ * @param write  : write entry supplying format and scaling
+ * @param value  : the value as published, in engineering units
+ * @param regs   : filled with up to 2 register values in wire order
+ *
+ * @return number of registers to write (1 or 2), < 0 on error
+ */
+int
+modbusmq_write_encode(modbusmq_context_t *context, const modbusmq_write_t *write, double value, uint16_t *regs)
+{
+    if (!context || !write || !regs)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return modbusmq_encode_scaled(context,
+                                  write->name ? write->name : (write->topic ? write->topic : "?"),
+                                  write->format, write->add, write->mod, write->mul,
+                                  value, regs);
+}
+
+/**
+ *
+ * @brief the same, for one channel of a block write
+ *
+ * A block channel carries its own format and scaling rather than the entry's,
+ * because the whole point of a block is that the six registers being written
+ * are six different things.
+ *
+ * @param context: allocated context (for logging only)
+ * @param write  : the block write entry the channel belongs to
+ * @param channel: channel supplying format and scaling
+ * @param value  : the value as published, in engineering units
+ * @param regs   : filled with up to 2 register values in wire order
+ *
+ * @return number of registers to write (1 or 2), < 0 on error
+ */
+int
+modbusmq_write_channel_encode(modbusmq_context_t *context, const modbusmq_write_t *write,
+                              const modbusmq_write_channel_t *channel, double value, uint16_t *regs)
+{
+    if (!context || !write || !channel || !regs)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const char
+        *entry = write->name ? write->name : (write->topic ? write->topic : "?");
+    char
+        name[160];
+
+    //
+    // Name the channel and not just the entry. A block reporting one value in
+    // six as out of range has to say which one, and an unnamed channel is
+    // still findable by the number the config file gave it — which is its
+    // position in the array, so there is no need to pass it in.
+    //
+    if (channel->name)
+    {
+        snprintf(name, sizeof(name), "%s.%s", entry, channel->name);
+    }
+    else if (write->channels)
+    {
+        snprintf(name, sizeof(name), "%s.channel.%d", entry, (int)(channel - write->channels) + 1);
+    }
+    else
+    {
+        snprintf(name, sizeof(name), "%s", entry);
+    }
+
+    return modbusmq_encode_scaled(context, name,
+                                  channel->format, channel->add, channel->mod, channel->mul,
+                                  value, regs);
+}
+
+/**
+ *
+ * @brief lay a block of values out as the registers of one function 16 write
+ *
+ * Every register of the block is written, which is the whole reason the config
+ * validator refuses a block with a gap in it: a partially specified block would
+ * have to be read before it could be written, and a read-modify-write across
+ * two frames is not atomic on a bus the device is also being polled on. One
+ * function 16 frame either lands whole or does not land at all.
+ *
+ * @param context: allocated context
+ * @param write  : block write entry
+ * @param values : one value per channel in channel order, in engineering units
+ * @param nvalues: how many, or < 0 to use each channel's configured default
+ * @param regs   : filled with write->naddress registers in wire order
+ * @param nregs  : registers the caller has room for
+ *
+ * @return number of registers to write, < 0 on error
+ */
+int
+modbusmq_write_encode_block(modbusmq_context_t *context, const modbusmq_write_t *write,
+                            const double *values, int nvalues, uint16_t *regs, int nregs)
+{
+    if (!context || !write || !regs)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const char
+        *name = write->name ? write->name : (write->topic ? write->topic : "?");
+
+    if (write->channel_max <= 0 || !write->channels || write->naddress <= 0)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: not a block write\n", name);
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (nregs < write->naddress)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: block is %d registers, caller has room for %d\n",
+                      name, write->naddress, nregs);
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (nvalues >= 0 && nvalues != write->channel_max)
+    {
+        modbusmq_logf(LOG_ERROR, "write %s: block takes %d values, payload carried %d. action: skip write\n",
+                      name, write->channel_max, nvalues);
+        return -1;
+    }
+
+    if (nvalues >= 0 && !values)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(regs, 0, write->naddress * sizeof(*regs));
+
+    for(int c = 0; c < write->channel_max; ++c)
+    {
+        const modbusmq_write_channel_t
+            *channel = &write->channels[c];
+        double
+            v;
+
+        if (nvalues < 0)
+        {
+            //
+            // The trigger form. A channel with no default leaves a hole in a
+            // block that has to be written whole, so refuse the write rather
+            // than send a zero nobody asked for into a fuse.
+            //
+            if (!channel->has_value)
+            {
+                modbusmq_logf(LOG_ERROR, "write %s: channel %d has no value to fall back on, so there is nothing to trigger. action: skip write\n",
+                              name, c+1);
+                return -1;
+            }
+            v = channel->value;
+        }
+        else
+        {
+            v = values[c];
+        }
+
+        uint16_t
+            enc[2] = {0};
+        int
+            n = modbusmq_write_channel_encode(context, write, channel, v, enc);
+
+        if (n < 0)
+        {
+            return -1; // already logged, with the reason
+        }
+
+        //
+        // Checked again rather than taken on trust from the validator: this
+        // writes into the caller's array, and the cost of being sure is two
+        // comparisons per channel.
+        //
+        int
+            first = channel->offset / 2;
+
+        if ((channel->offset % 2) != 0 || first < 0 || first + n > write->naddress)
+        {
+            modbusmq_logf(LOG_ERROR, "write %s: channel %d at offset %d does not fit a %d-register block\n",
+                          name, c+1, channel->offset, write->naddress);
+            errno = EINVAL;
+            return -1;
+        }
+
+        for(int i = 0; i < n; ++i)
+        {
+            regs[first + i] = enc[i];
+        }
+    }
+
+    return write->naddress;
 }
 
 /**
@@ -2535,6 +2767,65 @@ modbusmq_frame_error_code(struct modbusmq_context_t *context, modbusmq_frame_t *
     }
 
     return context->cb.modbusmq_frame_error_code(context, frame);
+}
+
+/**
+ *
+ * @brief the exception code of a response, or 0 when it is not an exception
+ *
+ * Unlike modbusmq_frame_error_code(), which hands back the byte at the code's
+ * offset whatever happens to be there, this one first establishes that the
+ * frame is a complete exception reply. That makes it safe to call on any
+ * response, which is what an error callback needs: it is handed every failed
+ * request, including the ones that failed for reasons no device ever saw.
+ *
+ * @param context: allocated context
+ * @param frame: a response frame
+ *
+ * @return 1..255 exception code, 0 when this is not an exception reply
+ */
+int
+modbusmq_frame_exception_code(struct modbusmq_context_t *context, modbusmq_frame_t *frame)
+{
+    if (!context || !frame)
+    {
+        errno = EINVAL;
+        return 0;
+    }
+
+    return context->cb.modbusmq_frame_exception(context, frame);
+}
+
+/**
+ *
+ * @brief name a Modbus exception code
+ *
+ * The codes defined by the specification, and nothing device-specific: a
+ * vendor code above 6 is real and worth passing on as a number, but naming it
+ * would be inventing a meaning.
+ *
+ * @param code: exception code from modbusmq_frame_exception_code()
+ *
+ * @return description, never 0
+ */
+const char *
+modbusmq_exception_string(int code)
+{
+    switch (code)
+    {
+    case 0x01: return "illegal function";
+    case 0x02: return "illegal data address";
+    case 0x03: return "illegal data value";
+    case 0x04: return "slave device failure";
+    case 0x05: return "acknowledge, command accepted but not complete";
+    case 0x06: return "slave device busy";
+    case 0x08: return "memory parity error";
+    case 0x0A: return "gateway path unavailable";
+    case 0x0B: return "gateway target device failed to respond";
+    default:   break;
+    }
+
+    return "unknown exception";
 }
 
 
@@ -3669,6 +3960,21 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
                 // flush discards it too and hands the backlog forward for
                 // good.
                 //
+                //
+                // ...unless it is an exception addressed to this very request,
+                // which is not a stale frame at all: it is the answer, and the
+                // answer is no. Stepping over it and waiting would burn the
+                // whole frame timeout on a response that has already been and
+                // gone, and then report the wrong reason for the failure.
+                //
+                // The reader is left exactly as it is, so the error callback
+                // can still read the exception code off it.
+                //
+                if (context->cb.modbusmq_msg_exception(context, msg) > 0)
+                {
+                    return MODBUSMQ_ERR_EXCEPTION;
+                }
+
                 rc = modbusmq_frame_drain(context, reader);
 
                 if (rc > 0)
@@ -3874,7 +4180,7 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
         modbusmq_flush(context);
         context->resync_pending = 1;
 
-        modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_PROTOCOL);
+        modbusmq_report_error(context, &wrapper->msg, modbusmq_reject_reason(context, &wrapper->msg));
 
         context->msg_wrapper_head = context->msg_wrapper_head->next;
         free(wrapper);
@@ -4330,8 +4636,24 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                     //
                     modbusmq_logf(LOG_ERROR, "%s frame rejected, stream resynced. action: keep waiting for the real response\n",
                                   modbusmq_msg_tag(context, msg));
-                    modbusmq_report_error(context, msg, MODBUSMQ_ERR_PROTOCOL);
+                    modbusmq_report_error(context, msg, modbusmq_reject_reason(context, msg));
                     result = MODBUSMQ_ERR_PROTOCOL;
+                }
+                else if (rc == MODBUSMQ_ERR_EXCEPTION)
+                {
+                    //
+                    // The answer is in and it is a refusal, so there is
+                    // nothing left to wait for.
+                    //
+                    int
+                        code = modbusmq_frame_exception_code(context, reader);
+
+                    modbusmq_logf(LOG_ERROR, "%s device refused the request: %s (%d). action: give up\n",
+                                  modbusmq_msg_tag(context, msg), modbusmq_exception_string(code), code);
+
+                    modbusmq_report_error(context, msg, MODBUSMQ_ERR_EXCEPTION);
+                    result = MODBUSMQ_ERR_PROTOCOL;
+                    break;
                 }
                 else if (rc < 0)
                 {
@@ -4355,7 +4677,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                                       modbusmq_msg_tag(context, msg), result);
                         modbusmq_flush(context);
                         context->resync_pending = 1;
-                        modbusmq_report_error(context, msg, MODBUSMQ_ERR_PROTOCOL);
+                        modbusmq_report_error(context, msg, modbusmq_reject_reason(context, msg));
                         result = MODBUSMQ_ERR_PROTOCOL;
                     }
                     break;
@@ -4428,6 +4750,34 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         context->rx++;
         rc = modbusmq_handle_msg(context, wrapper);
     }
+    else if (rc == MODBUSMQ_ERR_EXCEPTION)
+    {
+        //
+        // The device answered and the answer was no. The request is finished,
+        // so drop it and let the queue move on -- but nothing is wrong with
+        // the stream and there is nothing to resync: a complete, correctly
+        // addressed frame was read, it just carried a refusal.
+        //
+        int
+            code = modbusmq_frame_exception_code(context, &wrapper->msg.frame[1]);
+
+        modbusmq_logf(LOG_ERROR, "%s device refused the request: %s (%d). action: discard request and continue\n",
+                      modbusmq_msg_tag(context, &wrapper->msg), modbusmq_exception_string(code), code);
+
+        context->err++;
+        modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_EXCEPTION);
+
+        context->msg_wrapper_head = wrapper->next;
+        free(wrapper);
+
+        //
+        // Reported upward as a rejected frame all the same. What a caller has
+        // to do about the stream is identical, and handing an existing caller
+        // a code it has never seen would have it read this as something worse
+        // than a device declining one register.
+        //
+        rc = MODBUSMQ_ERR_PROTOCOL;
+    }
     else if (rc == MODBUSMQ_ERR_PROTOCOL)
     {
         //
@@ -4438,7 +4788,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         modbusmq_logf(LOG_ERROR, "%s response rejected. action: discard request and continue\n",
                       modbusmq_msg_tag(context, &wrapper->msg));
 
-        modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_PROTOCOL);
+        modbusmq_report_error(context, &wrapper->msg, modbusmq_reject_reason(context, &wrapper->msg));
 
         context->msg_wrapper_head = wrapper->next;
         free(wrapper);
