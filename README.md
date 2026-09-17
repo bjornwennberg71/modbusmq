@@ -75,6 +75,24 @@ configuration. That is now the main way the project gets used.
 **[MODBUSMQ.md](MODBUSMQ.md) — how to set up `modbusmq` and write its config file.**
 Start there. [config/CONFIG.md](config/CONFIG.md) is the reference for every key.
 
+#### Limits
+These are caps on what a config file may describe, not on what a running
+bridge does. Nothing bounds how many writes it performs over its lifetime.
+
+| Key | Cap | Why |
+|---|---|---|
+| `input.max` | 100 | inputs in one file |
+| `input.N.channel.max` | 100 | channels in one input |
+| `write.max` | 100 | write entries in one file |
+| `write.N.channel.max` | 123 | channels in one block write |
+| `write.N.naddress` | 123 | registers, what one function 16 frame carries |
+
+The 123 is Modbus. The 100 is a judgement call, and wanting past it is
+usually a sign the config is the wrong shape: one `write.N` block puts up
+to 123 registers in a single frame, so a hundred entries is already some
+twelve thousand registers of one-shot init. Reach for a block write before
+reaching for the cap.
+
 ### Tests
 ```bash
 (cd debug && make check)      # this tree
@@ -101,7 +119,7 @@ Example configs included:
 - `accuvim_ii.config`  
 - `polarium.config`  
 - `shoto.config`
-- `example1.config` → `example3.config`, graded from minimal to fully fledged
+- `example1.config` → `example4.config`, graded from minimal to fully fledged
 
 ---
 
