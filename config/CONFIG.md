@@ -17,6 +17,39 @@ Config files use a simple `key = value` format. `#` starts a comment — everyth
 modbusmq.connect = tcp://192.168.1.50:502   # inline comment also works
 ```
 
+## Contents
+
+- [Repeating a key](#repeating-a-key)
+- [Connection](#connection)
+  - [TCP](#tcp)
+  - [RTU (RS-232 / RS-485)](#rtu-rs-232--rs-485)
+  - [Timing](#timing)
+- [Inputs](#inputs)
+  - [Declaring inputs](#declaring-inputs)
+  - [Per-input keys](#per-input-keys)
+- [Bit inputs: coils and discrete inputs](#bit-inputs-coils-and-discrete-inputs)
+- [Channels](#channels)
+  - [Per-channel keys](#per-channel-keys)
+  - [Data formats](#data-formats)
+  - [Text formats: serial numbers, versions and timestamps](#text-formats-serial-numbers-versions-and-timestamps)
+  - [Scaling](#scaling)
+  - [Publishing: decimals and rate limiting](#publishing-decimals-and-rate-limiting)
+- [Writes (MQTT to Modbus)](#writes-mqtt-to-modbus)
+  - [Per-write keys](#per-write-keys)
+  - [Scaling a write](#scaling-a-write)
+  - [Commands: on_value / off_value](#commands-on_value--off_value)
+  - [Block writes](#block-writes)
+  - [Acknowledgements](#acknowledgements)
+  - [Example](#example)
+  - [Notes](#notes)
+- [MQTT](#mqtt)
+  - [retain and qos](#retain-and-qos)
+  - [`publish.*`: config-wide rate-limiting defaults](#publish-config-wide-rate-limiting-defaults)
+- [Complete example](#complete-example)
+- [Common pitfalls](#common-pitfalls)
+
+---
+
 ## Repeating a key
 
 **The last value wins.** Setting a key twice is supported, not a mistake — it lets a file carry a default and override it further down, or keep an alternative visible next to the one in use rather than deleting it:
