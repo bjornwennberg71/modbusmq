@@ -54,11 +54,17 @@ typedef struct pending_write_t
 } pending_write_t;
 
 //
-// Writes are rare and short-lived -- one is on the wire at a time and the
-// frame timeout evicts the worst case -- so a small array scanned end to end
-// beats anything with pointers in it.
+// One write is on the wire at a time, but nothing bounds how many are waiting
+// behind it: every MQTT message that arrives is posted on the spot, and only
+// the head of that queue is in flight. A bulk init that publishes to a few
+// hundred write topics at once therefore has a few hundred writes outstanding
+// together, so the table grows with the queue rather than standing at a size
+// such a burst walks straight past, losing the acks of everything it passed.
 //
-#define PENDING_WRITE_MAX 32
+// It is still an array scanned end to end. The scan is over writes waiting for
+// an answer, not over the run, and it drains as fast as the bus replies.
+//
+#define PENDING_WRITE_INITIAL 32
 
 typedef struct global_info
 {
@@ -79,8 +85,9 @@ typedef struct global_info
     int verbose;
     struct mosquitto *mosq;
 
-    pending_write_t pending[PENDING_WRITE_MAX];
-    int             npending;
+    pending_write_t *pending;
+    int              npending;
+    int              pending_max;   // entries allocated, high-water mark of one burst
 } global_info;
  
 
@@ -191,17 +198,40 @@ static void
 pending_write_add(uint32_t req_id, int write_index, const char *value)
 {
     //
-    // Full means something is very wrong -- one write is on the wire at a
-    // time and the frame timeout evicts the worst case -- so drop the oldest
-    // and say so rather than silently refusing to track the newest.
+    // Grow to fit. Every posted message is reported exactly once, so the table
+    // drains on its own and what is allocated here is one burst of writes, not
+    // the run.
     //
-    if (GI.npending >= PENDING_WRITE_MAX)
+    if (GI.npending >= GI.pending_max)
     {
-        modbusmq_logf(LOG_ERROR, "ack: %d writes already waiting for an answer, dropping the oldest (req %u)\n",
-                      GI.npending, GI.pending[0].req_id);
+        int
+            nmax = GI.pending_max ? GI.pending_max * 2 : PENDING_WRITE_INITIAL;
+        pending_write_t
+            *grown = realloc(GI.pending, (size_t)nmax * sizeof(*grown));
 
-        memmove(&GI.pending[0], &GI.pending[1], (PENDING_WRITE_MAX - 1) * sizeof(GI.pending[0]));
-        GI.npending = PENDING_WRITE_MAX - 1;
+        if (grown)
+        {
+            GI.pending     = grown;
+            GI.pending_max = nmax;
+        }
+        else if (GI.npending > 0)
+        {
+            //
+            // Out of memory is no reason to lose the newest write. Drop the
+            // oldest instead -- it is the one the frame timeout is about to
+            // answer anyway -- and say so.
+            //
+            modbusmq_logf(LOG_ERROR, "ack: out of memory for %d writes waiting for an answer, dropping the oldest (req %u)\n",
+                          GI.npending, GI.pending[0].req_id);
+
+            memmove(&GI.pending[0], &GI.pending[1], (size_t)(GI.pending_max - 1) * sizeof(GI.pending[0]));
+            GI.npending = GI.pending_max - 1;
+        }
+        else
+        {
+            modbusmq_logf(LOG_ERROR, "ack: out of memory, write req %u goes out unacked\n", req_id);
+            return;
+        }
     }
 
     pending_write_t
@@ -1787,4 +1817,6 @@ main(int argc, char **argv)
     
     modbusmq_close(context);
     modbusmq_free(context);
+
+    free(GI.pending);
 }
