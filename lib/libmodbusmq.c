@@ -3298,17 +3298,20 @@ modbusmq_frame_write_mask_registers( struct modbusmq_context_t *context, modbusm
 #define MODBUSMQ_MSG_SUBSCRIBE  2
 
 /**
- * 
+ *
  * @brief Internal helper to enqueue a Modbusmq message.
- * 
- * Allocates a new modbusmq_msg_wrapper_t, copies the message into it and
- * appends it to the tail of the context message queue. Flags indicate
- * whether this is a one-shot post or a subscription.
- * 
+ *
+ * Allocates a new modbusmq_msg_wrapper_t and copies the message into it.
+ * A subscription (MODBUSMQ_MSG_SUBSCRIBE) is appended to the tail of the
+ * context message queue, same as always. A one-shot write (MODBUSMQ_MSG_POST)
+ * instead jumps ahead of every already-queued poll -- see the MODBUSMQ_MSG_POST
+ * branch below for why, and why it still never overtakes the current head or
+ * another already-queued write.
+ *
  * @param context: allocated context
  * @param msg: message to enqueue
  * @param flags: message flags (e.g. MODBUSMQ_MSG_POST, MODBUSMQ_MSG_SUBSCRIBE)
- * 
+ *
  * @return 0 on success, < 0 on error
  */
 
@@ -3334,12 +3337,35 @@ modbusmq_post_internal(modbusmq_context_t *context, modbusmq_msg_t *msg, int fla
     memcpy(&wrapper->msg, msg, sizeof(modbusmq_msg_t));
 
     modbusmq_msg_prepare(context, &wrapper->msg);
-    
+
     wrapper->flags        = flags;
 
     if (!context->msg_wrapper_head)
     {
         context->msg_wrapper_head = wrapper;
+    }
+    else if (flags == MODBUSMQ_MSG_POST)
+    {
+        //
+        // A write's own answer usually matters to something waiting on it
+        // right now, so it should not sit behind a whole cycle of telemetry
+        // reads on a shared bus. Splice in right after the last already-
+        // queued write (several writes posted in a row still go out in the
+        // order they were posted) and ahead of the first queued poll found
+        // after that point. Never touches the current head itself, whatever
+        // its own type -- the head may already be mid-transmission, and
+        // reordering it out from under itself would corrupt that request.
+        //
+        modbusmq_msg_wrapper_t
+            *prev = context->msg_wrapper_head;
+
+        while (prev->next && prev->next->flags == MODBUSMQ_MSG_POST)
+        {
+            prev = prev->next;
+        }
+
+        wrapper->next = prev->next;
+        prev->next    = wrapper;
     }
     else
     {
