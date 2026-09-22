@@ -954,9 +954,9 @@ modbusmq_config_parse(const char *filename)
             }
             int
                 nvalue = (int)strtoul(value, NULL, 0);
-            if (nvalue < 0 || nvalue > 100)
+            if (nvalue < 0 || nvalue > MODBUSMQ_INPUT_WRITE_MAX)
             {
-                fprintf(stderr, "%d: %s must be between [0..100]\n", line_num, key);
+                fprintf(stderr, "%d: %s must be between [0..%d]\n", line_num, key, MODBUSMQ_INPUT_WRITE_MAX);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -1371,9 +1371,9 @@ modbusmq_config_parse(const char *filename)
             }
             int
                 nvalue = (int)strtoul(value, NULL, 0);
-            if (nvalue < 0 || nvalue > 100)
+            if (nvalue < 0 || nvalue > MODBUSMQ_INPUT_WRITE_MAX)
             {
-                fprintf(stderr, "%d: %s must be between [0..100]\n", line_num, key);
+                fprintf(stderr, "%d: %s must be between [0..%d]\n", line_num, key, MODBUSMQ_INPUT_WRITE_MAX);
                 fclose(fp);
                 free(line);
                 return -1;

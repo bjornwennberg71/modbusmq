@@ -127,7 +127,7 @@ An **input** is one Modbus read request — a slave device, a register type, a s
 `input.max` must appear **before** any `input.N.*` keys. It allocates the input slots.
 
 ```
-input.max        = 3       # number of inputs (1–100)
+input.max        = 3       # number of inputs (1–1000)
 input.query_mode = series  # parallell (default) or series
 ```
 

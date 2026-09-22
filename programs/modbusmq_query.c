@@ -38,7 +38,9 @@ typedef struct global_info
     int         mod;
     int         mul;
     int         add;
+    int         function;    // modbusmq_write_function_e; --function was given, register writes only
     int         dry_run;     // build and print the frame, send nothing
+    int         timeout_ms;  // --timeout was given; 0 means "not given, keep modbusmq_send()'s own 2000ms default"
 } global_info;
 
 static global_info GI;
@@ -69,13 +71,21 @@ print_help(int argc, char **argv, int print_long)
         printf("\n");
         printf("--write value         : write instead of read. naddr is not used.\n");
         printf("                        %s writes a coil (function 05); a register\n", MODBUSMQ_TYPE_COIL);
-        printf("                        write is function 06, or 16 for a 4-byte format.\n");
+        printf("                        write is function 06, or 16 for a 4-byte format,\n");
+        printf("                        unless --function forces one explicitly.\n");
         printf("--format fmt          : data format for a register write, default %s.\n", MODBUSMQ_FORMAT_UAB);
         printf("                        int_ab/uint_ab/int_abcd/float_abcd and so on.\n");
         printf("--mod n               : scaling, same convention as a config channel.\n");
         printf("--mul n                 The value given to --write is in engineering units\n");
         printf("--add n                 and these undo the scaling, exactly as modbusmq does.\n");
+        printf("--function fn         : force the register write's own function code -- %s\n", MODBUSMQ_FUNCTION_WRITE_REGISTERS);
+        printf("                        forces function 16 even for a single register, same as a\n");
+        printf("                        config's own write.N.function; %s forces\n", MODBUSMQ_FUNCTION_WRITE_REGISTER);
+        printf("                        function 06. A device whose function-code table has no 06\n");
+        printf("                        (some do not) needs this -- confirmed on real hardware.\n");
         printf("--dry-run            : show the frame that would be sent, and send nothing.\n");
+        printf("--timeout ms         : max time to wait for a response before giving up.\n");
+        printf("                        Default 2000ms if not given.\n");
         printf("\n");
         printf("write examples:\n");
         printf("  # 25.5 degC into a signed register holding tenths\n");
@@ -146,7 +156,9 @@ parse_argv(int argc, char **argv)
                  strcmp(argv[a], "--format") == 0 ||
                  strcmp(argv[a], "--mod") == 0 ||
                  strcmp(argv[a], "--mul") == 0 ||
-                 strcmp(argv[a], "--add") == 0)
+                 strcmp(argv[a], "--add") == 0 ||
+                 strcmp(argv[a], "--function") == 0 ||
+                 strcmp(argv[a], "--timeout") == 0)
         {
             const char
                 *flag = argv[a];
@@ -191,7 +203,26 @@ parse_argv(int argc, char **argv)
             }
             else if (strcmp(flag, "--mod") == 0) { GI.mod = (int)strtol(argv[a], NULL, 0); }
             else if (strcmp(flag, "--mul") == 0) { GI.mul = (int)strtol(argv[a], NULL, 0); }
-            else                                 { GI.add = (int)strtol(argv[a], NULL, 0); }
+            else if (strcmp(flag, "--add") == 0) { GI.add = (int)strtol(argv[a], NULL, 0); }
+            else if (strcmp(flag, "--function") == 0)
+            {
+                GI.function = modbusmq_config_write_function(argv[a]);
+                if (GI.function == modbusmq_write_function_unknown)
+                {
+                    fprintf(stderr, "--function: unrecognized value '%s' (expected %s/%s/%s)\n",
+                            argv[a], MODBUSMQ_FUNCTION_WRITE_COIL, MODBUSMQ_FUNCTION_WRITE_REGISTER, MODBUSMQ_FUNCTION_WRITE_REGISTERS);
+                    return -1;
+                }
+            }
+            else
+            {
+                GI.timeout_ms = (int)strtol(argv[a], NULL, 0);
+                if (GI.timeout_ms <= 0)
+                {
+                    fprintf(stderr, "--timeout: %s is not a positive number of milliseconds\n", argv[a]);
+                    return -1;
+                }
+            }
         }
         else if (GI.addr < 0)
         {
@@ -341,10 +372,23 @@ main(int argc, char **argv)
         modbusmq_rtu_rts_delay(context, modbusmq_config->modbusmq_rts_delay_us);
     }
     // set max delay to wait for a frame
+    //
+    // modbusmq_query has no -c config file of its own (unlike modbusmq), so
+    // modbusmq_config_get() always hands back a freshly zeroed struct here -- this branch never
+    // actually fires for this binary. It's also not what --timeout below controls: this
+    // context->frame_timeout_ms mechanism only governs modbusmq's own persistent async poll
+    // loop, a different code path modbusmq_query's synchronous modbusmq_send() calls never go
+    // through -- confirmed by tracing an actual "no answer" probe live, which reported the
+    // hardcoded 2000ms below and never mentioned this one.
     if (modbusmq_config->modbusmq_frame_timeout_ms > 0)
     {
         modbusmq_frame_timeout(context, modbusmq_config->modbusmq_frame_timeout_ms);
     }
+
+    // What --timeout actually controls: modbusmq_send()'s own blocking wait, below. 2000 is the
+    // default when --timeout isn't given, unchanged from before that flag existed.
+    const int
+        timeout_ms = GI.timeout_ms > 0 ? GI.timeout_ms : 2000;
 
     //
     // A dry run never touches the device, so it must not need one to be
@@ -397,15 +441,16 @@ main(int argc, char **argv)
                 write;
 
             memset(&write, 0, sizeof(write));
-            write.name    = "query";
-            write.slave   = GI.slave;
-            write.type    = modbusmq_type_holding_register;
-            write.address = GI.addr;
-            write.format  = GI.format;
-            write.length  = modbusmq_format_size(GI.format);
-            write.mod     = GI.mod;
-            write.mul     = GI.mul;
-            write.add     = GI.add;
+            write.name     = "query";
+            write.slave    = GI.slave;
+            write.type     = modbusmq_type_holding_register;
+            write.address  = GI.addr;
+            write.format   = GI.format;
+            write.length   = modbusmq_format_size(GI.format);
+            write.mod      = GI.mod;
+            write.mul      = GI.mul;
+            write.add      = GI.add;
+            write.function = GI.function;
 
             nregs = modbusmq_write_encode(context, &write, GI.write_value, regs);
             if (nregs < 0)
@@ -415,7 +460,13 @@ main(int argc, char **argv)
                 return -1;
             }
 
-            if (nregs == 1)
+            // A 2-byte format (nregs == 1) can still be told to go out as FC16
+            // (--function write_registers) -- some devices only implement FC16, even for a
+            // single register (confirmed on real hardware: TYT MB8Z's own function-code table has
+            // no FC06 at all). Anything wider than one register has no FC06 encoding at all, so it
+            // always takes this branch regardless of --function. Mirrors modbus_write_post()'s own
+            // identical check in modbusmq.c.
+            if (nregs == 1 && write.function != modbusmq_write_function_registers)
             {
                 modbusmq_frame_write_register(context, &msg.frame[0], GI.addr, regs[0]);
                 printf("write: slave %d reg 0x%04X = %g (raw 0x%04X, function 06)\n",
@@ -446,7 +497,7 @@ main(int argc, char **argv)
             return 0;
         }
 
-        rc = modbusmq_send(context, &msg, 2000);
+        rc = modbusmq_send(context, &msg, timeout_ms);
         if (rc < 0)
         {
             fprintf(stderr, "Write failed: rc=%d\n", rc);
@@ -495,7 +546,7 @@ main(int argc, char **argv)
         exit(2);
     }
 
-    rc = modbusmq_send(context, &msg, 2000);
+    rc = modbusmq_send(context, &msg, timeout_ms);
     if (rc < 0)
     {
         fprintf(stderr, "Unable to send and receive a message: rc=%d\n", rc);

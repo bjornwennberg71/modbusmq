@@ -981,7 +981,15 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 
         snprintf(written, sizeof(written), "%.6g", value);
 
-        if (nregs == 1)
+        //
+        // A 2-byte format (nregs == 1) can still be told to go out as FC16
+        // (write.N.function = write_registers) -- some devices only implement
+        // FC16, even for a single register (confirmed on real hardware: TYT
+        // MB8Z's own function-code table has no FC06 at all). Anything wider
+        // than one register has no FC06 encoding at all, so it always takes
+        // the other branch regardless of write->function.
+        //
+        if (nregs == 1 && write->function != modbusmq_write_function_registers)
         {
             modbusmq_frame_write_register(context, &msg.frame[0], write->address, regs[0]);
             modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X)\n",

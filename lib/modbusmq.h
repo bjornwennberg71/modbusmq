@@ -26,8 +26,11 @@
     MODBUSMQ_STRINGIFY(MODBUSMQ_VERSION_MINOR) "." \
     MODBUSMQ_STRINGIFY(MODBUSMQ_VERSION_BUILD)
 
-// maximum length of a frame 
+// maximum length of a frame
 #define MODBUSMQ_FRAME_MAX 260
+
+// maximum value accepted for input.max / write.max in a config file
+#define MODBUSMQ_INPUT_WRITE_MAX 1000
 
 #define MODBUSMQ_MIN(x,y) ((x) < (y) ? (x) : (y))
 #define MODBUSMQ_MAX(x,y) ((x) > (y) ? (x) : (y))
