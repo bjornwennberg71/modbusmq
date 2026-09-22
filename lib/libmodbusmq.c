@@ -3937,6 +3937,30 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
                 {
                     modbusmq_frame_debug(context, writer);
                 }
+
+                //
+                // Slave 0 is the Modbus RTU broadcast address: every device on
+                // the bus acts on it, and none of them answer -- answering
+                // would mean every slave trying to talk at once. The request
+                // is complete the instant it is fully on the wire; arming the
+                // reader here would wait out a response that is never coming,
+                // reported as a timeout failure (found live, 2026-09-22: a
+                // broadcast write correctly reached the device but
+                // modbusmq_query still waited the full 2000ms and exited 1).
+                //
+                // modbusmq_frame_slave(), not buf[0] directly: buf[0] is only
+                // the slave byte for RTU framing. TCP has no such byte there
+                // at all (it is the MBAP header's transaction id instead), and
+                // reading it as one misfired on every TCP transaction whose
+                // transaction id happened to have a zero high byte -- caught
+                // by test_read.c/test_loop.c both regressing across the board,
+                // not just broadcast cases.
+                //
+                if (modbusmq_frame_slave(context, writer) == 0)
+                {
+                    return 0;
+                }
+
                 memset(reader, 0, sizeof(*reader));
                 reader->length = context->header_length;
                 //printf("writer->length = %d, setting reader->length = %d\n", writer->length, reader->length);

@@ -1323,6 +1323,15 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     {
         return 1;
     }
+
+    // Slave 0 is the Modbus broadcast address -- no device answers one, by
+    // spec, so the reader frame is deliberately never armed for it
+    // (modbusmq_handle_write_read() returns as soon as the write completes).
+    // Nothing below this point has anything to check: there is no response.
+    if (writer->buf[0] == 0)
+    {
+        return 0;
+    }
     else if (reader->xmit != reader->length)
     {
         return 2;
