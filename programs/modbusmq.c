@@ -386,9 +386,9 @@ mqtt_write_result(const modbusmq_write_t *write, uint32_t req_id, const char *st
 }
 
 static void
-mqtt_write_ack(const modbusmq_write_t *write, uint32_t req_id, const char *value)
+mqtt_write_ack(const modbusmq_write_t *write, uint32_t req_id, const char *value, int broadcast)
 {
-    mqtt_write_result(write, req_id, "ok", value, NULL, NULL, 0);
+    mqtt_write_result(write, req_id, broadcast ? "sent" : "ok", value, NULL, NULL, 0);
 }
 
 static void
@@ -450,12 +450,13 @@ modbusmq_message_callback(struct modbusmq_context_t *context, modbusmq_msg_t *ms
     const modbusmq_write_t
         *write = &modbusmq_config->writes[pending->write_index];
 
-    modbusmq_logf(LOG_INFO, "write %s: slave %d accepted req %u\n",
+    modbusmq_logf(LOG_INFO, "write %s: slave %d %s req %u\n",
                   write->name ? write->name : write->topic,
                   modbusmq_frame_slave(context, &msg->frame[0]),
+                  modbusmq_msg_broadcast(context, msg) ? "broadcast" : "accepted",
                   msg->req_id);
 
-    mqtt_write_ack(write, msg->req_id, pending->value);
+    mqtt_write_ack(write, msg->req_id, pending->value, modbusmq_msg_broadcast(context, msg));
 #else
     (void)context;
     (void)msg;

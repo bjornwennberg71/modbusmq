@@ -181,6 +181,13 @@ echo "command line"
 expect_output "modbusmq_query reads a register" "4800" \
     "$QUERY" "tcp://localhost:$PORT" 1 input_register 0x00 2 -2
 
+# unit id 0 is an ordinary address on TCP, not a broadcast: it gets an answer
+# (the fixture serves no data there, so any decoded register will do)
+expect_output "modbusmq_query reads unit id 0 over TCP" "^0x0000 = " \
+    "$QUERY" "tcp://localhost:$PORT" 0 input_register 0x00 2 -2
+expect_output "a TCP write to unit id 0 is acknowledged, not broadcast" "device acknowledged" \
+    "$QUERY" "tcp://localhost:$PORT" 0 holding_register 0x00 --write 1
+
 # every program reports the version the header declares
 MAJOR=$(grep 'define MODBUSMQ_VERSION_MAJOR' "$ROOT/lib/modbusmq.h" | grep -oE '[0-9]+')
 MINOR=$(grep 'define MODBUSMQ_VERSION_MINOR' "$ROOT/lib/modbusmq.h" | grep -oE '[0-9]+$')

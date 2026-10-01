@@ -2674,6 +2674,29 @@ modbusmq_msg_prepare(modbusmq_context_t *context, modbusmq_msg_t *msg)
 }
 
 /**
+ *
+ * @brief Whether a request is a broadcast that no device will answer.
+ *
+ * True only for an RTU write to slave 0. TCP has no broadcast, so a request
+ * to unit id 0 there expects an answer like any other.
+ *
+ * @param context: allocated context
+ * @param msg: message to check
+ *
+ * @return 1 broadcast, 0 not
+ */
+int
+modbusmq_msg_broadcast(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    if (!context || !msg || !context->cb.modbusmq_msg_broadcast)
+    {
+        return 0;
+    }
+
+    return context->cb.modbusmq_msg_broadcast(context, msg);
+}
+
+/**
  * 
  * @brief get the slave id from a frame
  * 
@@ -3386,6 +3409,8 @@ modbusmq_post_internal(modbusmq_context_t *context, modbusmq_msg_t *msg, int fla
  * 
  * Performs basic argument validation and enqueues the message for later
  * processing using modbusmq_post_internal() with MODBUSMQ_MSG_POST semantics.
+ * A post is queued ahead of every waiting subscription poll, behind the
+ * in-flight head and any earlier posts.
  * 
  * @param context: allocated context
  * @param msg: message to post
@@ -3938,25 +3963,8 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
                     modbusmq_frame_debug(context, writer);
                 }
 
-                //
-                // Slave 0 is the Modbus RTU broadcast address: every device on
-                // the bus acts on it, and none of them answer -- answering
-                // would mean every slave trying to talk at once. The request
-                // is complete the instant it is fully on the wire; arming the
-                // reader here would wait out a response that is never coming,
-                // reported as a timeout failure (found live, 2026-09-22: a
-                // broadcast write correctly reached the device but
-                // modbusmq_query still waited the full 2000ms and exited 1).
-                //
-                // modbusmq_frame_slave(), not buf[0] directly: buf[0] is only
-                // the slave byte for RTU framing. TCP has no such byte there
-                // at all (it is the MBAP header's transaction id instead), and
-                // reading it as one misfired on every TCP transaction whose
-                // transaction id happened to have a zero high byte -- caught
-                // by test_read.c/test_loop.c both regressing across the board,
-                // not just broadcast cases.
-                //
-                if (modbusmq_frame_slave(context, writer) == 0)
+                // a broadcast is done once it is on the wire: nobody answers
+                if (modbusmq_msg_broadcast(context, msg))
                 {
                     return 0;
                 }

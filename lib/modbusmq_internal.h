@@ -93,6 +93,10 @@ typedef struct modbusmq_cb_t
                                           // transport's own, which is why this
                                           // is not one comparison in the FSM.
     int       (*modbusmq_msg_exception)(   struct modbusmq_context_t *context, struct modbusmq_msg_t *msg);
+                                          // 1 when no device will answer this
+                                          // request: an RTU write to slave 0.
+                                          // TCP has no broadcast, so never.
+    int       (*modbusmq_msg_broadcast)(   struct modbusmq_context_t *context, struct modbusmq_msg_t *msg);
     int       (*modbusmq_frame_addr)      (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_naddr)     (struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     int       (*modbusmq_frame_nbytes)    (struct modbusmq_context_t *context, modbusmq_frame_t *frame);

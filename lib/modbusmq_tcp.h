@@ -52,5 +52,6 @@ extern int      modbusmq_tcp_frame_nbytes         (modbusmq_context_t *context, 
 extern int      modbusmq_tcp_frame_error_code     (modbusmq_context_t *context, modbusmq_frame_t *reader);
 extern int      modbusmq_tcp_frame_exception      (modbusmq_context_t *context, modbusmq_frame_t *reader);
 extern int      modbusmq_tcp_msg_exception        (modbusmq_context_t *context, modbusmq_msg_t *msg);
+extern int      modbusmq_tcp_msg_broadcast        (modbusmq_context_t *context, modbusmq_msg_t *msg);
 
 #endif // modbusmq_tcp_h_

@@ -198,7 +198,7 @@ extern int  modbusmq_frame_read_input_registers(  struct modbusmq_context_t *con
 extern int  modbusmq_frame_write_mask_registers(  struct modbusmq_context_t *context, modbusmq_frame_t *frame, int addr, int and_mask, int or_mask);
 extern void modbusmq_frame_debug(                 struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     
-// post a message
+// post a message; queued ahead of waiting subscription polls, in post order
 extern int  modbusmq_post(                struct modbusmq_context_t *context, modbusmq_msg_t *msg);
 // subscribe to message every interval in ms
 extern int  modbusmq_subscribe(           struct modbusmq_context_t *context, modbusmq_msg_t *msg, int interval_ms);
@@ -213,6 +213,8 @@ extern int modbusmq_rtu_rts_delay(struct modbusmq_context_t *context, int interv
 // utility getters
 extern int         modbusmq_frame_transaction_id(struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern int         modbusmq_frame_slave(         struct modbusmq_context_t *context, modbusmq_frame_t *frame);
+// 1 for an RTU write to slave 0, which no device answers; 0 otherwise
+extern int         modbusmq_msg_broadcast(       struct modbusmq_context_t *context, modbusmq_msg_t *msg);
 extern int         modbusmq_frame_function(      struct modbusmq_context_t *context, modbusmq_frame_t *frame);
 extern uint8_t *   modbusmq_frame_data(          struct modbusmq_context_t *context, modbusmq_frame_t *frame);
     

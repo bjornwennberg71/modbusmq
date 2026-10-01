@@ -757,7 +757,7 @@ The payload is JSON:
 
 | Field | Meaning |
 |---|---|
-| `status` | `ok` or `error` |
+| `status` | `ok`, `error`, or `sent` for an RTU broadcast (slave 0), which no device answers |
 | `name` | `write.N.name`, when the entry has one |
 | `topic` | the write topic this is about — several entries may share one, and each answers for itself |
 | `req` | the library's request id, the same one the log lines carry. **Absent** when the write was refused before it was ever queued, because then there is no request to correlate with |
@@ -783,7 +783,7 @@ The payload is JSON:
 
 The ack reports the device's answer to the write, and nothing else.
 
-`{"status":"ok"}` means the device returned a well-formed echo carrying the function and slave that were asked for — the write was accepted. `modbusmq` writes what it was told to write and reports what came back. It does not read the register afterwards, does not compare, does not retry, and does not decide on the publisher's behalf that the value needs asserting again.
+`{"status":"ok"}` means the device returned a well-formed echo carrying the function and slave that were asked for — the write was accepted. `{"status":"sent"}` is an RTU write to slave 0: it went out on the bus, and by spec no device answers a broadcast, so nothing confirms it landed. On TCP, unit id 0 is an ordinary address and acks as usual. `modbusmq` writes what it was told to write and reports what came back. It does not read the register afterwards, does not compare, does not retry, and does not decide on the publisher's behalf that the value needs asserting again.
 
 That division is deliberate. Publish `-10` and `-10` goes to the device; the ack says whether the device took it. Whether a device that clamps or rounds its own setpoints needs following up is a question about that device and that application, and the answer belongs where the requirement lives. Poll the register alongside the write if you want to watch it — `config/example4.config` does exactly that — but that is a choice the config makes, not something the write path does behind your back.
 

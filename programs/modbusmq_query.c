@@ -513,9 +513,17 @@ main(int argc, char **argv)
 
         //
         // A device echoes the write back. Anything else has already been
-        // rejected by modbusmq_send(), so reaching here means it took it.
+        // rejected by modbusmq_send(), so reaching here means it took it --
+        // except a broadcast, which nobody answers.
         //
-        printf("device acknowledged the write\n");
+        if (modbusmq_msg_broadcast(context, &msg))
+        {
+            printf("broadcast sent, no device answers one\n");
+        }
+        else
+        {
+            printf("device acknowledged the write\n");
+        }
 
         if (GI.verbose)
         {

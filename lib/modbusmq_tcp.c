@@ -121,6 +121,7 @@ modbusmq_tcp_context(const char *pzConnectString)
         .modbusmq_frame_error_code = modbusmq_tcp_frame_error_code,
         .modbusmq_frame_exception  = modbusmq_tcp_frame_exception,
         .modbusmq_msg_exception    = modbusmq_tcp_msg_exception,
+        .modbusmq_msg_broadcast    = modbusmq_tcp_msg_broadcast,
         .modbusmq_frame_addr       = modbusmq_tcp_frame_addr,
         .modbusmq_frame_naddr      = modbusmq_tcp_frame_naddr,
         .modbusmq_frame_nbytes     = modbusmq_tcp_frame_nbytes,
@@ -739,6 +740,20 @@ modbusmq_tcp_frame_exception( modbusmq_context_t *context, modbusmq_frame_t *fra
     }
 
     return frame->buf[8];
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// One connection reaches one server, so there is nothing to broadcast to: unit
+// id 0 addresses the device directly and gets an answer like any other.
+// internal function
+//
+int
+modbusmq_tcp_msg_broadcast(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    (void)context;
+    (void)msg;
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////////////////

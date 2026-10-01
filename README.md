@@ -81,15 +81,15 @@ bridge does. Nothing bounds how many writes it performs over its lifetime.
 
 | Key | Cap | Why |
 |---|---|---|
-| `input.max` | 100 | inputs in one file |
+| `input.max` | 1000 | inputs in one file |
 | `input.N.channel.max` | 100 | channels in one input |
-| `write.max` | 100 | write entries in one file |
+| `write.max` | 1000 | write entries in one file |
 | `write.N.channel.max` | 123 | channels in one block write |
 | `write.N.naddress` | 123 | registers, what one function 16 frame carries |
 
-The 123 is Modbus. The 100 is a judgement call, and wanting past it is
+The 123 is Modbus. The 100 and 1000 are judgement calls, and wanting past it is
 usually a sign the config is the wrong shape: one `write.N` block puts up
-to 123 registers in a single frame, so a hundred entries is already some
+to 123 registers in a single frame, so even a hundred entries is already some
 twelve thousand registers of one-shot init. Reach for a block write before
 reaching for the cap.
 

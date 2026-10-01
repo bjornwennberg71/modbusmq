@@ -102,6 +102,7 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
         .modbusmq_frame_error_code = modbusmq_rtu_frame_error_code,
         .modbusmq_frame_exception  = modbusmq_rtu_frame_exception,
         .modbusmq_msg_exception    = modbusmq_rtu_msg_exception,
+        .modbusmq_msg_broadcast    = modbusmq_rtu_msg_broadcast,
         .modbusmq_frame_addr       = modbusmq_rtu_frame_addr,
         .modbusmq_frame_naddr      = modbusmq_rtu_frame_naddr,
         .modbusmq_frame_nbytes     = modbusmq_rtu_frame_nbytes,
@@ -1301,6 +1302,38 @@ modbusmq_rtu_frame_drain(modbusmq_context_t *context, modbusmq_frame_t *frame)
 
 //////////////////////////////////////////////////////////////////////////////
 //
+// Slave 0 is the RTU broadcast address: every slave acts on a write to it and
+// none answers. Only writes -- a read has nothing to broadcast, so a read to
+// slave 0 is left to time out like any other unanswered request.
+// internal function
+//
+int
+modbusmq_rtu_msg_broadcast(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    (void)context;
+
+    modbusmq_frame_t *writer = msg->frame[0].is_writer ? &msg->frame[0] : &msg->frame[1];
+
+    if (writer->length < 2 || writer->buf[0] != 0)
+    {
+        return 0;
+    }
+
+    switch (writer->buf[1])
+    {
+    case MODBUSMQ_WRITE_SINGLE_COIL:
+    case MODBUSMQ_WRITE_SINGLE_REGISTER:
+    case MODBUSMQ_WRITE_MULTIPLE_COILS:
+    case MODBUSMQ_WRITE_MULTIPLE_REGISTERS:
+    case MODBUSMQ_MASK_WRITE_REGISTER:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
 // Check req + res and make sure they are correct
 // internal function
 //
@@ -1324,11 +1357,8 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
         return 1;
     }
 
-    // Slave 0 is the Modbus broadcast address -- no device answers one, by
-    // spec, so the reader frame is deliberately never armed for it
-    // (modbusmq_handle_write_read() returns as soon as the write completes).
-    // Nothing below this point has anything to check: there is no response.
-    if (writer->buf[0] == 0)
+    // a broadcast has no response to check, see modbusmq_rtu_msg_broadcast()
+    if (modbusmq_rtu_msg_broadcast(context, msg))
     {
         return 0;
     }
