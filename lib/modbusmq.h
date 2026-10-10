@@ -209,6 +209,9 @@ extern int  modbusmq_subscribe(           struct modbusmq_context_t *context, mo
 // in rounds mode or no deep input has that slave.
 //
 extern int  modbusmq_set_focus(           struct modbusmq_context_t *context, int slave);
+// module.count templates: the slave id of module index 0..module.count-1, for
+// modbusmq_set_focus(). < 0 when templates are off or index is out of range.
+extern int  modbusmq_module_slave(        struct modbusmq_context_t *context, int index);
 // the focus slave, -1 for none
 extern int  modbusmq_get_focus(           struct modbusmq_context_t *context);
 // rounds started, and the duration of the last completed one; either pointer may be NULL

@@ -28,6 +28,7 @@ modbusmq.connect = tcp://192.168.1.50:502   # inline comment also works
   - [Declaring inputs](#declaring-inputs)
   - [Per-input keys](#per-input-keys)
   - [Round mode](#round-mode)
+  - [Module templates](#module-templates)
 - [Bit inputs: coils and discrete inputs](#bit-inputs-coils-and-discrete-inputs)
 - [Channels](#channels)
   - [Per-channel keys](#per-channel-keys)
@@ -242,6 +243,125 @@ bytes, ~2 ms; one more transaction costs ~30 ms of turnaround on its own. So
 reading straight across a reserved gap of up to ~14 registers is cheaper than
 splitting the block in two around it (counting the extra request and response
 framing as well, the break-even is nearer 20).
+
+### Module templates
+
+A battery rack is N identical modules on one bus, with consecutive slave ids
+from a base that differs per site (often 32 or 39; ACE starts at 1). Instead of
+one copy of every input per module, write the inputs once with
+`slave = module`, and say how many modules there are:
+
+```
+module.count       = 16   # modules in the rack; 0 (default) = templates off
+module.slave_first = 39   # slave id of module 0 (default 1)
+```
+
+| Key | Default | Range |
+|---|---|---|
+| `module.count` | 0 | 0..247; 0 means no template is allowed |
+| `module.slave_first` | 1 | 1..247; the last module (`slave_first + count - 1`) must be 247 or less |
+
+**Expansion.** Right after the file is read, every input with
+`input.N.slave = module` is replaced by `module.count` copies, copy *i*
+(0..`module.count`-1) on slave `module.slave_first + i`. Modules count from 0,
+so module 0 is on `module.slave_first`. Inputs with a numeric slave stay as they
+are, so a string controller at a fixed id can sit in the same file. The order
+is module-major and fixed:
+
+1. module 0: every input of the file in file order, the templates as module 0's
+   copies and the fixed-slave inputs in their own place among them;
+2. module 1, 2, ...: the copies of the templates only, in file order.
+
+So the fixed-slave inputs keep their position relative to module 0. Everything
+else -- validation, publish defaults, `mqtt.topic_prefix`, round mode -- sees
+the expanded inputs. Messages name the expanded input and its module:
+`input.4.channel.1 (module 1, slave 40): ...`.
+
+**Topics carry the module index, never the slave id.** `%i` in a topic is
+replaced by the index, 0..`module.count`-1; `%%` is a literal `%`, and any other
+`%` is left alone. `%i` also works in `mqtt.topic_prefix`, which is applied
+first (then every input must be a template). Two mistakes are parse errors:
+
+- a topic of a template input without `%i`: every module would publish to it;
+- `%i` in an input with a numeric slave: it has no index.
+
+**Writes** expand the same way: `write.N.slave = module` with `%i` in
+`write.N.topic` (and in `write.N.ack_topic` when set; the derived ack topic
+follows the expanded topic). A broadcast write (`slave = 0`) is numeric and
+never expands.
+
+**Round mode** works unchanged: the copies differ in slave, so the deep inputs
+are read one module per round. A program that shows module *i* maps the index
+to the slave for `modbusmq_set_focus()` with `modbusmq_module_slave()`, see
+[LIBMODBUSMQ.md](../LIBMODBUSMQ.md).
+
+**Per site.** The same file serves every site; the site sets the two keys with
+`-e`. Unlike other keys, these two are also taken from `-e` when the file does
+not carry them, because a file usually leaves `module.slave_first` at 1:
+
+```
+modbusmq -c rack.config -e module.count=32 -e module.slave_first=39
+```
+
+**Example**, a 16-module pack, the totals every round and the cells one module
+per round:
+
+```
+module.count       = 16
+module.slave_first = 39
+
+input.max            = 3
+input.query_mode     = rounds
+input.round_interval = 1000
+
+input.1.slave       = module
+input.1.type        = input_register
+input.1.address     = 0x0000
+input.1.naddress    = 3
+input.1.tier        = fast
+input.1.channel.max = 3
+input.1.channel.1.offset = 0
+input.1.channel.1.format = uint_ab
+input.1.channel.1.mod    = -100
+input.1.channel.1.topic  = battery/%i/voltage
+input.1.channel.2.offset = 2
+input.1.channel.2.format = int_ab
+input.1.channel.2.mod    = -10
+input.1.channel.2.topic  = battery/%i/current
+input.1.channel.3.offset = 4
+input.1.channel.3.format = uint_ab
+input.1.channel.3.topic  = battery/%i/soc
+
+input.2.slave       = module
+input.2.type        = input_register
+input.2.address     = 0x0100
+input.2.naddress    = 16
+input.2.tier        = deep
+input.2.channel.max = 16
+input.2.channel.1.offset = 0
+input.2.channel.1.format = uint_ab
+input.2.channel.1.mod    = -1000
+input.2.channel.1.topic  = battery/%i/cell/1/voltage
+# ... channels 2..16
+
+input.3.slave       = 1          # the string controller, fixed slave, no %i
+input.3.type        = input_register
+input.3.address     = 0x0000
+input.3.naddress    = 1
+input.3.tier        = fast
+input.3.channel.max = 1
+input.3.channel.1.offset = 0
+input.3.channel.1.format = uint_ab
+input.3.channel.1.topic  = string/voltage
+```
+
+This expands to 33 inputs: `battery/0/...` on slave 39 up to `battery/15/...`
+on slave 54, and `string/voltage` on slave 1.
+
+**Limits.** The caps apply to the expanded config: at most 1000 inputs and
+1000 writes in all, 100 channels per input. A 32-module rack with 10 inputs and
+~90 channels per module is 320 inputs and ~2900 channels, about 0.75 MB of
+config in memory.
 
 ---
 

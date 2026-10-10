@@ -686,11 +686,15 @@ modbusmq_config_override_unmatched(void)
 //
 // @return 0 when the block is consistent, < 0 with a message on stderr
 //
+static const char *config_write_name(char *buf, int nbuf, const modbusmq_write_t *write);
+
 static int
 config_validate_write_block(int w, modbusmq_write_t *write)
 {
+    char
+        name_buf[96];
     const char
-        *name = write->name ? write->name : "?";
+        *name = config_write_name(name_buf, sizeof(name_buf), write);
     int
         span     = 0,
         defaults = 1;
@@ -816,6 +820,603 @@ config_validate_write_block(int w, modbusmq_write_t *write)
     return 0;
 }
 
+//////////////////////////////////////////////////////////////////////////////
+//
+// Module templates.
+//
+// A battery rack is N identical modules on one bus, on consecutive slave ids.
+// An input or write with slave = module is a template: right after the file
+// has been read it is replaced by module.count copies, copy i (0-based,
+// 0..module.count-1) on slave module.slave_first + i. Everything after that -- validation,
+// publish defaults, the topic prefix -- sees ordinary inputs and never knows.
+//
+// Order is module-major: module 0's copies of every template, in file order,
+// with the fixed-slave entries in their file positions among them, then
+// module 1's copies of the templates only, and so on.
+//
+// Topics carry the module index, never the slave id, through %i: the slave id
+// is a site detail, the index is what a dashboard is built against.
+//
+
+//
+// .module of an entry with a fixed slave. Module 0 is a real module, so the
+// "no module" value is negative; every input and write starts out with it.
+//
+#define CONFIG_MODULE_NONE (-1)
+
+//
+// .module while parsing, for an entry whose slave is "module". Replaced by
+// the 0-based index once expanded, so it never survives the parse.
+//
+#define CONFIG_MODULE_TEMPLATE (-2)
+
+//
+// Highest unicast slave id Modbus allows.
+//
+#define CONFIG_SLAVE_MAX 247
+
+//
+// @brief module.count and module.slave_first.
+//
+// Range checks that need both keys wait for config_check_modules(), since the
+// file may set them in either order.
+//
+// @return 0 when handled, 1 when key is not a module key, < 0 on a bad value
+//
+static int
+config_module_key(modbusmq_config_t *config, const char *key, const char *value, int line_num)
+{
+    if (strcmp(key, "module.count") == 0)
+    {
+        config->module_count = (int)strtol(value, NULL, 0);
+        if (config->module_count < 0 || config->module_count > CONFIG_SLAVE_MAX)
+        {
+            fprintf(stderr, "%d: %s=%s: must be between 0 and %d\n", line_num, key, value, CONFIG_SLAVE_MAX);
+            return -1;
+        }
+        return 0;
+    }
+    if (strcmp(key, "module.slave_first") == 0)
+    {
+        config->module_slave_first = (int)strtol(value, NULL, 0);
+        if (config->module_slave_first < 1 || config->module_slave_first > CONFIG_SLAVE_MAX)
+        {
+            fprintf(stderr, "%d: %s=%s: must be between 1 and %d\n", line_num, key, value, CONFIG_SLAVE_MAX);
+            return -1;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+//
+// @brief The last slave id must still be a unicast one.
+//
+// @return 0 when module.count and module.slave_first fit together, < 0 otherwise
+//
+static int
+config_check_modules(modbusmq_config_t *config)
+{
+    int
+        last = config->module_slave_first + config->module_count - 1;
+
+    if (config->module_count > 0 && last > CONFIG_SLAVE_MAX)
+    {
+        fprintf(stderr, "module.count = %d from module.slave_first = %d ends on slave %d, past %d\n",
+                config->module_count, config->module_slave_first, last, CONFIG_SLAVE_MAX);
+        return -1;
+    }
+    return 0;
+}
+
+//
+// @brief "input.3" or "input.3.channel.2", plus "(module 6, slave 45)" for an
+// expanded one, for messages.
+//
+// @param c: zero-based channel, or < 0 for the input itself
+//
+// @return buf
+//
+static const char *
+config_input_label(char *buf, int nbuf, int i, int c, const modbusmq_input_t *input)
+{
+    int
+        n;
+
+    if (c >= 0)
+    {
+        n = snprintf(buf, nbuf, "input.%d.channel.%d", i+1, c+1);
+    }
+    else
+    {
+        n = snprintf(buf, nbuf, "input.%d", i+1);
+    }
+
+    if (input->module >= 0 && n >= 0 && n < nbuf)
+    {
+        snprintf(buf + n, nbuf - n, " (module %d, slave %d)", input->module, input->slave);
+    }
+    return buf;
+}
+
+//
+// @brief A write's name for messages, with the module and slave for an
+// expanded one: "blk, module 1, slave 40".
+//
+// @return buf
+//
+static const char *
+config_write_name(char *buf, int nbuf, const modbusmq_write_t *write)
+{
+    const char
+        *name = write->name ? write->name : "?";
+
+    if (write->module >= 0)
+    {
+        snprintf(buf, nbuf, "%s, module %d, slave %d", name, write->module, write->slave);
+    }
+    else
+    {
+        snprintf(buf, nbuf, "%s", name);
+    }
+    return buf;
+}
+
+//
+// @brief strdup() that passes NULL through.
+//
+// @return the copy, NULL for a NULL string; exits on allocation failure, as
+//         the rest of the parse does
+//
+static char *
+config_strdup(const char *s)
+{
+    if (!s)
+    {
+        return NULL;
+    }
+
+    char
+        *copy = strdup(s);
+    if (!copy)
+    {
+        perror("Unable to allocate");
+        exit(2);
+    }
+    return copy;
+}
+
+//
+// @brief Free the strings an input's channels own, and the array.
+//
+static void
+config_free_input_channels(modbusmq_input_t *input)
+{
+    for(int c = 0; c < input->channel_max; ++c)
+    {
+        free(input->channels[c].topic);
+        free(input->channels[c].value_text);
+        free(input->channels[c].timefmt);
+    }
+    free(input->channels);
+    input->channels    = NULL;
+    input->channel_max = 0;
+}
+
+//
+// @brief Free the strings a write owns, and its channel array.
+//
+static void
+config_free_write(modbusmq_write_t *write)
+{
+    free(write->name);
+    free(write->topic);
+    free(write->ack_topic);
+
+    for(int c = 0; c < write->channel_max; ++c)
+    {
+        free(write->channels[c].name);
+    }
+    free(write->channels);
+    memset(write, 0, sizeof(*write));
+}
+
+//
+// @brief One module's copy of a template input: every string and the channel
+// array are its own, so the copies never share a topic to rewrite.
+//
+static void
+config_copy_input(modbusmq_input_t *dst, const modbusmq_input_t *src, int module, int slave)
+{
+    *dst        = *src;
+    dst->module = module;
+    dst->slave  = slave;
+
+    if (src->channel_max <= 0 || !src->channels)
+    {
+        dst->channels = NULL;
+        return;
+    }
+
+    dst->channels = malloc(src->channel_max * sizeof(modbusmq_channel_t));
+    if (!dst->channels)
+    {
+        perror("Unable to allocate");
+        exit(2);
+    }
+    memcpy(dst->channels, src->channels, src->channel_max * sizeof(modbusmq_channel_t));
+
+    for(int c = 0; c < src->channel_max; ++c)
+    {
+        dst->channels[c].topic      = config_strdup(src->channels[c].topic);
+        dst->channels[c].value_text = config_strdup(src->channels[c].value_text);
+        dst->channels[c].timefmt    = config_strdup(src->channels[c].timefmt);
+    }
+}
+
+//
+// @brief The write counterpart of config_copy_input().
+//
+static void
+config_copy_write(modbusmq_write_t *dst, const modbusmq_write_t *src, int module, int slave)
+{
+    *dst           = *src;
+    dst->module    = module;
+    dst->slave     = slave;
+    dst->has_slave = 1;
+    dst->name      = config_strdup(src->name);
+    dst->topic     = config_strdup(src->topic);
+    dst->ack_topic = config_strdup(src->ack_topic);
+
+    if (src->channel_max <= 0 || !src->channels)
+    {
+        dst->channels = NULL;
+        return;
+    }
+
+    dst->channels = malloc(src->channel_max * sizeof(modbusmq_write_channel_t));
+    if (!dst->channels)
+    {
+        perror("Unable to allocate");
+        exit(2);
+    }
+    memcpy(dst->channels, src->channels, src->channel_max * sizeof(modbusmq_write_channel_t));
+
+    for(int c = 0; c < src->channel_max; ++c)
+    {
+        dst->channels[c].name = config_strdup(src->channels[c].name);
+    }
+}
+
+//
+// @brief Replace every slave = module input with module.count copies, in the
+// module-major order described above.
+//
+// @return 0 on success (nothing to do included), < 0 with a message on stderr
+//
+static int
+config_expand_inputs(modbusmq_config_t *config)
+{
+    int
+        ntemplate = 0;
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        if (config->inputs[i].module != CONFIG_MODULE_TEMPLATE)
+        {
+            continue;
+        }
+        if (config->module_count <= 0)
+        {
+            fprintf(stderr, "input.%d: slave = module needs module.count > 0, and module.count is %d\n",
+                    i+1, config->module_count);
+            return -1;
+        }
+        ntemplate++;
+    }
+
+    if (ntemplate == 0)
+    {
+        return 0;
+    }
+
+    int
+        total = (config->input_max - ntemplate) + ntemplate * config->module_count;
+
+    if (total > MODBUSMQ_INPUT_WRITE_MAX)
+    {
+        fprintf(stderr, "%d template input(s) x module.count %d come to %d inputs, more than %d\n",
+                ntemplate, config->module_count, total, MODBUSMQ_INPUT_WRITE_MAX);
+        return -1;
+    }
+
+    modbusmq_input_t
+        *inputs = calloc(total, sizeof(modbusmq_input_t));
+    if (!inputs)
+    {
+        perror("Unable to allocate");
+        exit(2);
+    }
+
+    int
+        n = 0;
+
+    for(int m = 0; m < config->module_count; ++m)
+    {
+        for(int i = 0; i < config->input_max; ++i)
+        {
+            modbusmq_input_t
+                *src = &config->inputs[i];
+
+            if (src->module != CONFIG_MODULE_TEMPLATE)
+            {
+                if (m == 0)
+                {
+                    inputs[n++] = *src; // the copy takes over the strings
+                }
+                continue;
+            }
+            config_copy_input(&inputs[n++], src, m, config->module_slave_first + m);
+        }
+    }
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        if (config->inputs[i].module == CONFIG_MODULE_TEMPLATE)
+        {
+            config_free_input_channels(&config->inputs[i]);
+        }
+    }
+    free(config->inputs);
+
+    config->inputs    = inputs;
+    config->input_max = total;
+    return 0;
+}
+
+//
+// @brief The write counterpart of config_expand_inputs(). A broadcast write
+// (slave 0) has a numeric slave, so it is never a template.
+//
+// @return 0 on success, < 0 with a message on stderr
+//
+static int
+config_expand_writes(modbusmq_config_t *config)
+{
+    int
+        ntemplate = 0;
+
+    for(int w = 0; w < config->write_max; ++w)
+    {
+        if (config->writes[w].module != CONFIG_MODULE_TEMPLATE)
+        {
+            continue;
+        }
+        if (config->module_count <= 0)
+        {
+            fprintf(stderr, "write.%d: slave = module needs module.count > 0, and module.count is %d\n",
+                    w+1, config->module_count);
+            return -1;
+        }
+        ntemplate++;
+    }
+
+    if (ntemplate == 0)
+    {
+        return 0;
+    }
+
+    int
+        total = (config->write_max - ntemplate) + ntemplate * config->module_count;
+
+    if (total > MODBUSMQ_INPUT_WRITE_MAX)
+    {
+        fprintf(stderr, "%d template write(s) x module.count %d come to %d writes, more than %d\n",
+                ntemplate, config->module_count, total, MODBUSMQ_INPUT_WRITE_MAX);
+        return -1;
+    }
+
+    modbusmq_write_t
+        *writes = calloc(total, sizeof(modbusmq_write_t));
+    if (!writes)
+    {
+        perror("Unable to allocate");
+        exit(2);
+    }
+
+    int
+        n = 0;
+
+    for(int m = 0; m < config->module_count; ++m)
+    {
+        for(int w = 0; w < config->write_max; ++w)
+        {
+            modbusmq_write_t
+                *src = &config->writes[w];
+
+            if (src->module != CONFIG_MODULE_TEMPLATE)
+            {
+                if (m == 0)
+                {
+                    writes[n++] = *src; // the copy takes over the strings
+                }
+                continue;
+            }
+            config_copy_write(&writes[n++], src, m, config->module_slave_first + m);
+        }
+    }
+
+    for(int w = 0; w < config->write_max; ++w)
+    {
+        if (config->writes[w].module == CONFIG_MODULE_TEMPLATE)
+        {
+            config_free_write(&config->writes[w]);
+        }
+    }
+    free(config->writes);
+
+    config->writes    = writes;
+    config->write_max = total;
+    return 0;
+}
+
+//
+// @brief Substitute the module index into one topic: %i is the index, %% is
+// a literal %, and any other % is left as it is.
+//
+// @param topic: in/out, replaced when it has a % in it
+// @param module: the index 0..module.count-1, or CONFIG_MODULE_NONE for an
+//        entry with a fixed slave, where %i is an error
+// @param label: who the topic belongs to, for the message
+//
+// @return the number of %i replaced, or < 0 with a message on stderr
+//
+static int
+config_topic_module(char **topic, int module, const char *label)
+{
+    if (!topic || !*topic || !strchr(*topic, '%'))
+    {
+        return 0;
+    }
+
+    const char
+        *p = *topic;
+    //
+    // %i is two characters and the index at most three digits, so twice the
+    // length is always room enough.
+    //
+    char
+        *out = malloc(2 * strlen(p) + 1),
+        *o   = out;
+    int
+        nindex = 0;
+
+    if (!out)
+    {
+        perror("Unable to allocate");
+        exit(2);
+    }
+
+    while(*p)
+    {
+        if (p[0] == '%' && p[1] == '%')
+        {
+            *o++ = '%';
+            p += 2;
+        }
+        else if (p[0] == '%' && p[1] == 'i')
+        {
+            if (module < 0)
+            {
+                fprintf(stderr, "%s: topic %s uses %%i, which only a slave = module entry may (%%%% for a literal %%)\n",
+                        label, *topic);
+                free(out);
+                return -1;
+            }
+            o += sprintf(o, "%d", module);
+            p += 2;
+            nindex++;
+        }
+        else
+        {
+            *o++ = *p++;
+        }
+    }
+    *o = 0;
+
+    free(*topic);
+    *topic = out;
+    return nindex;
+}
+
+//
+// @brief Put the module index into every topic, after mqtt.topic_prefix has
+// gone on so a prefix may carry %i too.
+//
+// Every topic of a template must carry %i: without it all the modules would
+// publish to (or subscribe to) the one topic, and the last reading in would
+// silently stand for every module.
+//
+// @return 0 on success, < 0 with a message on stderr
+//
+static int
+config_apply_module_topics(modbusmq_config_t *config)
+{
+    char
+        label[96];
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &config->inputs[i];
+
+        for(int c = 0; c < input->channel_max; ++c)
+        {
+            modbusmq_channel_t
+                *channel = &input->channels[c];
+
+            if (!channel->topic)
+            {
+                continue;
+            }
+
+            config_input_label(label, sizeof(label), i, c, input);
+
+            int
+                rc = config_topic_module(&channel->topic, input->module, label);
+            if (rc < 0)
+            {
+                return -1;
+            }
+            if (input->module >= 0 && rc == 0)
+            {
+                fprintf(stderr, "%s: topic %s has no %%i, so every module would publish to it\n", label, channel->topic);
+                return -1;
+            }
+        }
+    }
+
+    for(int w = 0; w < config->write_max; ++w)
+    {
+        modbusmq_write_t
+            *write = &config->writes[w];
+        char
+            name[96];
+
+        snprintf(label, sizeof(label), "write.%d (%s)", w+1, config_write_name(name, sizeof(name), write));
+
+        int
+            rc = config_topic_module(&write->topic, write->module, label);
+        if (rc < 0)
+        {
+            return -1;
+        }
+        if (write->module >= 0 && rc == 0)
+        {
+            fprintf(stderr, "%s: topic %s has no %%i, so one message would write every module\n", label, write->topic);
+            return -1;
+        }
+
+        if (!write->ack_topic)
+        {
+            continue;
+        }
+
+        rc = config_topic_module(&write->ack_topic, write->module, label);
+        if (rc < 0)
+        {
+            return -1;
+        }
+        if (write->module >= 0 && rc == 0)
+        {
+            fprintf(stderr, "%s: ack_topic %s has no %%i, so every module would ack on it\n", label, write->ack_topic);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 int
 modbusmq_config_parse(const char *filename)
 {
@@ -836,7 +1437,9 @@ modbusmq_config_parse(const char *filename)
     size_t
         line_len;
     int
-        line_num = 0;
+        line_num = 0,
+        seen_module_count       = 0,
+        seen_module_slave_first = 0;
 
     if (!modbusmq_config)
     {
@@ -856,6 +1459,8 @@ modbusmq_config_parse(const char *filename)
     modbusmq_config->offset_size = 1; // default 1 byte offset calculation
     modbusmq_config->mqtt_retain = 1; // what publishing has always done
     modbusmq_config->mqtt_qos    = 0;
+    modbusmq_config->module_count       = 0; // module templates off
+    modbusmq_config->module_slave_first = 1;
     
     while ((nread = getline(&line, &line_len, fp)) != -1)
     {
@@ -974,6 +1579,29 @@ modbusmq_config_parse(const char *filename)
                 return -1;
             }
         }
+        else if (strncmp(key, "module.", 7) == 0)
+        {
+            int
+                rc = config_module_key(modbusmq_config, key, value, line_num);
+            if (rc < 0)
+            {
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            if (rc > 0)
+            {
+                printf("%d: %s: Unknown config\n", line_num, key);
+            }
+            else if (key[7] == 'c')
+            {
+                seen_module_count = 1;
+            }
+            else
+            {
+                seen_module_slave_first = 1;
+            }
+        }
         else if (strcmp(key, "input.max") == 0)
         {
             if (modbusmq_config->inputs)
@@ -1003,6 +1631,10 @@ modbusmq_config_parse(const char *filename)
                     exit(2);
                 }
                 memset(modbusmq_config->inputs, 0, nvalue * sizeof(modbusmq_input_t));
+                for(int i = 0; i < nvalue; ++i)
+                {
+                    modbusmq_config->inputs[i].module = CONFIG_MODULE_NONE;
+                }
             }
         }
         // input.1.something
@@ -1036,7 +1668,20 @@ modbusmq_config_parse(const char *filename)
             
             if (strcmp(input_key, "slave") == 0)
             {
-                input->slave = (int)strtoul(value, NULL, 0);
+                //
+                // "module" makes this input a template, see
+                // config_expand_inputs(). The slave is settled there.
+                //
+                if (strcmp(value, "module") == 0)
+                {
+                    input->module = CONFIG_MODULE_TEMPLATE;
+                    input->slave  = 0;
+                }
+                else
+                {
+                    input->module = CONFIG_MODULE_NONE;
+                    input->slave  = (int)strtoul(value, NULL, 0);
+                }
             }
             else if (strcmp(input_key, "type") == 0)
             {
@@ -1433,6 +2078,10 @@ modbusmq_config_parse(const char *filename)
                     return -1;
                 }
                 memset(modbusmq_config->writes, 0, nvalue * sizeof(modbusmq_write_t));
+                for(int w = 0; w < nvalue; ++w)
+                {
+                    modbusmq_config->writes[w].module = CONFIG_MODULE_NONE;
+                }
             }
         }
         // write.1.something
@@ -1469,7 +2118,17 @@ modbusmq_config_parse(const char *filename)
             }
             else if (strcmp(write_key, "slave") == 0)
             {
-                write->slave     = (int)strtoul(value, NULL, 0);
+                // "module": a template, as input.N.slave
+                if (strcmp(value, "module") == 0)
+                {
+                    write->module = CONFIG_MODULE_TEMPLATE;
+                    write->slave  = 0;
+                }
+                else
+                {
+                    write->module = CONFIG_MODULE_NONE;
+                    write->slave  = (int)strtoul(value, NULL, 0);
+                }
                 write->has_slave = 1;
             }
             else if (strcmp(write_key, "type") == 0)
@@ -1835,6 +2494,43 @@ modbusmq_config_parse(const char *filename)
     free(line);
 
     //
+    // An override replaces a line the file has, and a file with templates
+    // often leaves module.slave_first at its default of 1 -- which is the key
+    // a site most needs to change. So the two module keys alone are also
+    // taken from -e when the file does not carry them.
+    //
+    if (!seen_module_count)
+    {
+        const char
+            *override = config_override_lookup("module.count");
+        if (override && config_module_key(modbusmq_config, "module.count", override, 0) < 0)
+        {
+            return -1;
+        }
+    }
+    if (!seen_module_slave_first)
+    {
+        const char
+            *override = config_override_lookup("module.slave_first");
+        if (override && config_module_key(modbusmq_config, "module.slave_first", override, 0) < 0)
+        {
+            return -1;
+        }
+    }
+
+    //
+    // Expand the module templates first, so everything below -- the format
+    // version, publish defaults, validation, the prefix -- works on the
+    // inputs and writes that will actually run.
+    //
+    if (config_check_modules(modbusmq_config) < 0 ||
+        config_expand_inputs(modbusmq_config) < 0 ||
+        config_expand_writes(modbusmq_config) < 0)
+    {
+        return -1;
+    }
+
+    //
     // Resolve what int_* means for this config before anything validates or
     // uses a format. config.version may appear anywhere in the file, so this
     // cannot be decided while parsing.
@@ -1855,7 +2551,10 @@ modbusmq_config_parse(const char *filename)
     {
         for(int i = 0; i < modbusmq_config->input_max; ++i)
         {
-            if (modbusmq_config->inputs[i].interval > 0)
+            //
+            // Once per template, not once per module copy of it.
+            //
+            if (modbusmq_config->inputs[i].interval > 0 && modbusmq_config->inputs[i].module <= 0)
             {
                 fprintf(stderr, "WARNING: input.%d.interval is ignored in query_mode rounds\n", i+1);
             }
@@ -1876,18 +2575,22 @@ modbusmq_config_parse(const char *filename)
         {
             modbusmq_channel_t
                 *channel = &input->channels[c];
+            char
+                label[96];
 
             if (!channel->topic)
             {
                 continue; // an unused channel slot
             }
 
+            config_input_label(label, sizeof(label), i, c, input);
+
             if (MODBUSMQ_TYPE_IS_BIT(input->type))
             {
                 if (channel->format != modbusmq_data_format_unknown)
                 {
-                    fprintf(stderr, "input.%d.channel.%d: format does not apply to a %s input, offset is a coil index\n",
-                            i+1, c+1,
+                    fprintf(stderr, "%s: format does not apply to a %s input, offset is a coil index\n",
+                            label,
                             input->type == modbusmq_type_coil ? MODBUSMQ_TYPE_COIL : MODBUSMQ_TYPE_DISCRETE_INPUT);
                     return -1;
                 }
@@ -1896,7 +2599,7 @@ modbusmq_config_parse(const char *filename)
 
             if (channel->format == modbusmq_data_format_unknown)
             {
-                fprintf(stderr, "input.%d.channel.%d: format is required\n", i+1, c+1);
+                fprintf(stderr, "%s: format is required\n", label);
                 return -1;
             }
 
@@ -1912,13 +2615,13 @@ modbusmq_config_parse(const char *filename)
                 //
                 if (channel->has_length)
                 {
-                    fprintf(stderr, "input.%d.channel.%d: length/nregisters applies to a text format only, %s is %d bytes\n",
-                            i+1, c+1, modbusmq_config_dataformat_name(channel->format), fixed);
+                    fprintf(stderr, "%s: length/nregisters applies to a text format only, %s is %d bytes\n",
+                            label, modbusmq_config_dataformat_name(channel->format), fixed);
                     return -1;
                 }
                 if (channel->timefmt || channel->localtime)
                 {
-                    fprintf(stderr, "input.%d.channel.%d: timefmt/timezone applies to a time format only\n", i+1, c+1);
+                    fprintf(stderr, "%s: timefmt/timezone applies to a time format only\n", label);
                     return -1;
                 }
                 continue;
@@ -1934,22 +2637,22 @@ modbusmq_config_parse(const char *filename)
             {
                 if (!channel->has_length)
                 {
-                    fprintf(stderr, "input.%d.channel.%d: %s needs length (bytes) or nregisters\n",
-                            i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                    fprintf(stderr, "%s: %s needs length (bytes) or nregisters\n",
+                            label, modbusmq_config_dataformat_name(channel->format));
                     return -1;
                 }
             }
             else if (channel->has_length && channel->length != fixed)
             {
-                fprintf(stderr, "input.%d.channel.%d: %s is %d bytes, not %d\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format), fixed, channel->length);
+                fprintf(stderr, "%s: %s is %d bytes, not %d\n",
+                        label, modbusmq_config_dataformat_name(channel->format), fixed, channel->length);
                 return -1;
             }
 
             if (channel->format == modbusmq_data_format_version_regs && (channel->length % 2) != 0)
             {
-                fprintf(stderr, "input.%d.channel.%d: %s reads whole registers, so length must be even (or use nregisters)\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: %s reads whole registers, so length must be even (or use nregisters)\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
 
@@ -1960,20 +2663,20 @@ modbusmq_config_parse(const char *filename)
             //
             if (channel->mod != 0 || channel->mul != 0)
             {
-                fprintf(stderr, "input.%d.channel.%d: mod/mul does not apply to %s, there is no number to scale\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: mod/mul does not apply to %s, there is no number to scale\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
             if (channel->add != 0 && !modbusmq_format_is_epoch(channel->format))
             {
-                fprintf(stderr, "input.%d.channel.%d: add applies to an epoch format only (as the epoch shift), not %s\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: add applies to an epoch format only (as the epoch shift), not %s\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
             if (channel->has_decimals)
             {
-                fprintf(stderr, "input.%d.channel.%d: decimals does not apply to %s\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: decimals does not apply to %s\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
 
@@ -1985,15 +2688,15 @@ modbusmq_config_parse(const char *filename)
             //
             if (channel->has_min_change || channel->has_min_change_rel)
             {
-                fprintf(stderr, "input.%d.channel.%d: min_change/min_change_rel needs a magnitude, which %s has none of -- use on_change\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: min_change/min_change_rel needs a magnitude, which %s has none of -- use on_change\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
 
             if ((channel->timefmt || channel->localtime) && !modbusmq_format_is_time(channel->format))
             {
-                fprintf(stderr, "input.%d.channel.%d: timefmt/timezone applies to a time format only, not %s\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: timefmt/timezone applies to a time format only, not %s\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
 
@@ -2004,8 +2707,8 @@ modbusmq_config_parse(const char *filename)
             //
             if (channel->localtime && !modbusmq_format_is_epoch(channel->format))
             {
-                fprintf(stderr, "input.%d.channel.%d: timezone applies to an epoch format only -- %s carries no timezone to convert from\n",
-                        i+1, c+1, modbusmq_config_dataformat_name(channel->format));
+                fprintf(stderr, "%s: timezone applies to an epoch format only -- %s carries no timezone to convert from\n",
+                        label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
         }
@@ -2021,8 +2724,10 @@ modbusmq_config_parse(const char *filename)
     {
         modbusmq_write_t
             *write = &modbusmq_config->writes[w];
+        char
+            name_buf[96];
         const char
-            *name = write->name ? write->name : "?";
+            *name = config_write_name(name_buf, sizeof(name_buf), write);
 
         if (!write->topic || !write->topic[0])
         {
@@ -2259,6 +2964,14 @@ modbusmq_config_parse(const char *filename)
             free(write->ack_topic);
             write->ack_topic = ack_topic;
         }
+    }
+
+    //
+    // %i and %% in topics, now the prefix is on.
+    //
+    if (config_apply_module_topics(modbusmq_config) < 0)
+    {
+        return -1;
     }
 
     //

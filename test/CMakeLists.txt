@@ -13,7 +13,7 @@ include_directories(../lib)
 # Each test program is standalone: it prints its own checks and returns
 # non-zero if any failed. run_tests.sh boots a modbusmq_server and aggregates.
 #
-foreach(T test_scaling test_read test_loop test_rounds)
+foreach(T test_scaling test_read test_loop test_rounds test_modules)
     add_executable(${T} ${T}.c)
     target_link_libraries(${T} modbusmq m)
     target_include_directories(${T} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -34,6 +34,6 @@ add_custom_target(check-all
 add_custom_target(check
     COMMAND ${CMAKE_COMMAND} -E echo ""
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_tests.sh ${CMAKE_BINARY_DIR}
-    DEPENDS test_scaling test_read test_loop test_rounds modbusmq_prog modbusmq_query modbusmq_server
+    DEPENDS test_scaling test_read test_loop test_rounds test_modules modbusmq_prog modbusmq_query modbusmq_server
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL)

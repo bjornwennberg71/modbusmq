@@ -299,6 +299,11 @@ typedef struct modbusmq_input_t
     int                 naddress;
     int                 interval;
     int                 tier;      // modbusmq_tier_e, rounds mode only
+                                   // Module index 0..module.count-1 when this
+                                   // input was expanded from a slave = module
+                                   // template, -1 for an input with a fixed
+                                   // slave. See "Module templates" in CONFIG.md.
+    int                 module;
     int                 channel_max;
     struct modbusmq_channel_t *channels;
 
@@ -371,6 +376,7 @@ typedef struct modbusmq_write_t
     char               *name;    // for the log; optional
     int                 slave;
     uint8_t             has_slave;
+    int                 module;  // as modbusmq_input_t.module
 
     int                 type;     // modbusmq_type_coil or _HoldingRegister
     int                 function; // modbusmq_write_function_e
@@ -461,6 +467,14 @@ typedef struct modbusmq_config_t
     int                 write_max;
     modbusmq_write_t    *writes;
 
+                                   // Module templates: inputs and writes with
+                                   // slave = module are expanded into
+                                   // module_count copies at parse time, copy
+                                   // i (0-based) on slave module_slave_first +
+                                   // i. module_count 0 is the feature off.
+    int                 module_count;
+    int                 module_slave_first;
+
     char               *mqtt_name;
     char               *mqtt_connect;
     char               *mqtt_topic_prefix;
@@ -504,6 +518,10 @@ extern modbusmq_config_t * modbusmq_config_get();
 //
 // runs a TCP config over RTU, because modbusmq.connect is a line that config
 // already carries.
+//
+// One exception: module.count and module.slave_first are also taken from an
+// override when the file does not set them, since they are per-site keys and
+// a file usually leaves module.slave_first at its default.
 //
 // Set these before modbusmq_config_parse(); the list is not copied, so it must
 // outlive the parse. modbusmq_config_override_unmatched() warns about entries

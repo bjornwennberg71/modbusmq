@@ -336,6 +336,16 @@ modbusmq_round_stats(context, &rounds, &last_ms);  // rounds started, duration o
 A focus change takes effect from the next round; the round already queued
 keeps the focus it started with.
 
+With module templates in the config (`module.count`, `slave = module`), a UI
+counts modules 0..`module.count`-1, as the topics do (module 0 is on
+`module.slave_first`). Map the index to the slave
+with the one helper rather than doing the arithmetic in the application:
+
+```c
+int slave = modbusmq_module_slave(context, 6);  // module.slave_first + 6; < 0 when off or out of range
+modbusmq_set_focus(context, slave);
+```
+
 ---
 
 ## 7. Errors, and which ones are fatal

@@ -81,9 +81,10 @@ bridge does. Nothing bounds how many writes it performs over its lifetime.
 
 | Key | Cap | Why |
 |---|---|---|
-| `input.max` | 1000 | inputs in one file |
+| `input.max` | 1000 | inputs in one file, and in all after module templates are expanded |
 | `input.N.channel.max` | 100 | channels in one input |
-| `write.max` | 1000 | write entries in one file |
+| `write.max` | 1000 | write entries in one file, and in all after expansion |
+| `module.count` | 247 | modules, one slave id each |
 | `write.N.channel.max` | 123 | channels in one block write |
 | `write.N.naddress` | 123 | registers, what one function 16 frame carries |
 
@@ -238,7 +239,9 @@ override lands at the point the key appears rather than after the parse.
 ```
 
 An override edits a line the config already has; it does not add one the config
-is missing. An override that matched nothing is reported as a warning — visible,
+is missing. The exception is `module.count` and `module.slave_first`, which are
+also applied when the file does not carry them (see "Module templates" in
+[config/CONFIG.md](config/CONFIG.md)). An override that matched nothing is reported as a warning — visible,
 but it does not stop the run.
 
 ## modbusmq_query

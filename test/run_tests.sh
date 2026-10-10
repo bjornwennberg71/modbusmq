@@ -142,6 +142,7 @@ echo
 #
 echo "unit tests"
 run_program test_scaling
+run_program test_modules "$HERE/modules.config"
 
 #
 # 2. start the virtual device
@@ -473,6 +474,92 @@ good_config "rounds, tier and round_interval in their numeric forms are accepted
     "input.query_mode = 2
 input.round_interval = 500
 input.1.tier = 1"
+
+#
+# Module templates. The expansion itself is test_modules' job; these are the
+# messages, which must name the expanded input and its module.
+#
+bad_config "a template topic without %i is refused, naming module and slave" \
+    "input.1.channel.1 \(module 0, slave 39\): topic t/bad has no %i" \
+    "module.count = 4
+module.slave_first = 39
+input.1.slave = module"
+
+bad_config "%i in a fixed-slave input is refused" "uses %i, which only a slave = module entry may" \
+    "input.1.channel.1.topic = t/%i/bad"
+
+bad_config "slave = module without module.count is refused" "needs module.count > 0" \
+    "input.1.slave = module
+input.1.channel.1.topic = t/%i/bad"
+
+# an error found after expansion names the expanded input and its module;
+# module 0 is the first copy checked
+bad_config "a validation error names the expanded input and module" \
+    "input.1.channel.1 \(module 0, slave 39\): length/nregisters" \
+    "module.count = 2
+module.slave_first = 39
+input.1.slave = module
+input.1.channel.1.topic = t/%i/bad
+input.1.channel.1.nregisters = 4"
+
+echo
+echo "module templates (4 modules from slave 39, rounds mode)"
+
+#
+# A second server on the module fixture, expanded the way a site would run it,
+# and the bridge against it with the same two overrides. Every module must
+# publish under its index, and the reads must come back from unit ids 39..42
+# (0x27..0x2A): on TCP the answer carries the unit id the request went to.
+#
+MPORT=$((PORT + 2))
+MODULES="$HERE/modules.config"
+MOVERRIDES="-e module.count=4 -e module.slave_first=39"
+
+"$SERVER" -c "$MODULES" -e modbusmq.connect=tcp://127.0.0.1:$MPORT $MOVERRIDES > "$TMP/mserver.log" 2>&1 &
+MSERVER_PID=$!
+
+for _ in $(seq 1 50); do
+    if (exec 3<>/dev/tcp/127.0.0.1/$MPORT) 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+
+# stdbuf: the log goes to stdout, and timeout ends the run before it is flushed
+timeout 2 stdbuf -oL "$BRIDGE" -c "$MODULES" -v -e modbusmq.connect=tcp://127.0.0.1:$MPORT $MOVERRIDES \
+    > "$TMP/modules.log" 2>&1
+
+for m in 0 1 2 3; do
+    if grep -q "info: battery/$m/voltage=51.20" "$TMP/modules.log"; then
+        ok "module $m publishes battery/$m/voltage"
+    else
+        bad "module $m publishes battery/$m/voltage"
+    fi
+done
+
+if grep -q "info: string/voltage=409.60" "$TMP/modules.log"; then
+    ok "the fixed-slave input still publishes"
+else
+    bad "the fixed-slave input still publishes"
+fi
+
+for unit in 27 28 29 2A; do
+    # unit id, function 04, 2 bytes, 3301: a deep cell read from that slave
+    if grep -q "<$unit><04><02><0C><E5>" "$TMP/modules.log"; then
+        ok "deep read answered by slave 0x$unit"
+    else
+        bad "deep read answered by slave 0x$unit"
+    fi
+done
+
+if grep -qE "battery/4/|battery/[0-9]+/[a-z/0-9]*=0(\.0+)?$" "$TMP/modules.log"; then
+    bad "no module outside 0..3, no zero readings"
+else
+    ok "no module outside 0..3, no zero readings"
+fi
+
+kill "$MSERVER_PID" 2>/dev/null
+wait "$MSERVER_PID" 2>/dev/null
 
 echo
 echo "--------------------------------"

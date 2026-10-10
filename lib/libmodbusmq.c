@@ -4612,6 +4612,37 @@ modbusmq_set_focus(modbusmq_context_t *context, int slave)
 
 /**
  *
+ * @brief The slave id of a module, for modbusmq_set_focus().
+ *
+ * A UI counts modules 0..module.count-1, the way the topics do (%i); the bus
+ * counts slaves from module.slave_first. This is the one place that maps the
+ * first onto the second, so an application never needs to know the base.
+ *
+ * @param context: allocated context, with a config set
+ * @param index: module index, 0..module.count-1
+ *
+ * @return the slave, or < 0 when module templates are off or index is out of range
+ */
+int
+modbusmq_module_slave(modbusmq_context_t *context, int index)
+{
+    if (!context || !context->config)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (index < 0 || index >= context->config->module_count)
+    {
+        errno = ERANGE;
+        return -1;
+    }
+
+    return context->config->module_slave_first + index;
+}
+
+/**
+ *
  * @brief The focus slave set by modbusmq_set_focus().
  *
  * @param context: allocated context
