@@ -3027,20 +3027,7 @@ modbusmq_config_close()
 
     for(int i = 0; i < modbusmq_config->input_max; ++i)
     {
-        modbusmq_input_t
-            *input = &modbusmq_config->inputs[i];
-
-        for(int c = 0; c < input->channel_max; ++c)
-        {
-            modbusmq_channel_t
-                *channel = &input->channels[c];
-            if (channel->topic)
-            {
-                free(channel->topic);
-            }
-        }
-
-        free(input->channels);
+        config_free_input_channels(&modbusmq_config->inputs[i]);
     }
     for(int w = 0; w < modbusmq_config->write_max; ++w)
     {
