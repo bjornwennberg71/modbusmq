@@ -94,7 +94,7 @@ modbusmq_tcp_context(const char *pzConnectString)
     assert(context);
     if (!context)
     {
-        perror("Unable to allocate modbusmq context");
+        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context, 0, sizeof(modbusmq_context_t));
@@ -156,7 +156,7 @@ modbusmq_tcp_context(const char *pzConnectString)
     assert(context->tcp);
     if (!context->tcp)
     {
-        perror("Unable to allocate modbusmq_tcp context");
+        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq_tcp context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context->tcp, 0, sizeof(modbusmq_tcp_context_t));

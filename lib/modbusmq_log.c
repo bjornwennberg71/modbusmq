@@ -52,10 +52,17 @@ modbusmq_logf(int level, const char *format, ...)
         azBuf2[10];
     sprintf(azBuf2, ":%03d", (int)mseconds);
     
-    fprintf(stdout, "%s%s:%s: ", azBuf, azBuf2, modbusmq_log_level(level));
+    // errors to stderr, as the library's direct prints did before they moved here
+    FILE *out = stdout;
+    if (level == LOG_ERROR)
+    {
+        out = stderr;
+    }
+
+    fprintf(out, "%s%s:%s: ", azBuf, azBuf2, modbusmq_log_level(level));
 
     va_start(ap, format);
-    vfprintf(stdout, format, ap);
+    vfprintf(out, format, ap);
     va_end(ap);
 
     //
@@ -65,5 +72,5 @@ modbusmq_logf(int level, const char *format, ...)
     // exactly the lines explaining why the process was being stopped. Flush
     // here so a log that was written is a log that survives.
     //
-    fflush(stdout);
+    fflush(out);
 }

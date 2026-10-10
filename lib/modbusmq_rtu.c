@@ -79,7 +79,7 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
     assert(context);
     if (!context)
     {
-        perror("Unable to allocate modbusmq context");
+        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context, 0, sizeof(modbusmq_context_t));
@@ -132,7 +132,7 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
     assert(context->rtu);
     if (!context->rtu)
     {
-        perror("Unable to allocate modbusmq_rtu context");
+        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq_rtu context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context->rtu, 0, sizeof(modbusmq_rtu_context_t));
@@ -562,7 +562,7 @@ modbusmq_rtu_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
     if (rc == -1)
     {
-        fprintf(stderr, "modbusmq_rtu_read: %d bytes, errno=%d\n", rc, errno);
+        modbusmq_logf(LOG_DEBUG, "modbusmq_rtu_read: %d bytes, errno=%d\n", rc, errno);
         if (errno == EAGAIN || errno == EWOULDBLOCK)
         {
             rc = 0;
@@ -602,7 +602,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
         sd = open(rtu->device, O_RDWR | O_NOCTTY | O_NDELAY | O_EXCL | O_CLOEXEC);
     if (sd < 0)
     {
-        fprintf(stderr, "Unable to open device: %s, err=%s\n", rtu->device, strerror(errno));
+        modbusmq_logf(LOG_ERROR, "Unable to open device: %s, err=%s\n", rtu->device, strerror(errno));
         return -1;
     }
 
@@ -615,7 +615,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
     rc = tcgetattr(sd, &tios);
     if (rc < 0)
     {
-        perror("tcgetattr");
+        modbusmq_logf(LOG_ERROR, "tcgetattr: %s\n", strerror(errno));
         close(sd);
         return -1;
     }
@@ -715,7 +715,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
     rc = tcsetattr(sd, TCSANOW, &tios);
     if (rc < 0)
     {
-        fprintf(stderr, "Unable to set termios on device %s, rc=%d, err=%s\n", rtu->device, rc, strerror(errno));
+        modbusmq_logf(LOG_ERROR, "Unable to set termios on device %s, rc=%d, err=%s\n", rtu->device, rc, strerror(errno));
         close(sd);
         return -1;
     }

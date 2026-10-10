@@ -487,6 +487,7 @@ modbusmq_reset_queue(modbusmq_context_t *context)
     modbusmq_msg_wrapper_t
         *elem = context->msg_wrapper_head;
 
+    int dropped = 0;
     while (elem)
     {
         modbusmq_msg_wrapper_t *next = elem->next;
@@ -500,12 +501,20 @@ modbusmq_reset_queue(modbusmq_context_t *context)
         // received it, and nothing anywhere said so. A dropped command has to
         // be as visible as one that timed out.
         //
-        modbusmq_logf(LOG_ERROR, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
+        // The error callback below still sees every one; the log gets one summary line.
+        //
+        modbusmq_logf(LOG_DEBUG, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
                       modbusmq_msg_tag(context, &elem->msg));
         modbusmq_report_error(context, &elem->msg, MODBUSMQ_ERR_TRANSPORT);
+        dropped++;
 
         free(elem);
         elem = next;
+    }
+
+    if (dropped > 0)
+    {
+        modbusmq_logf(LOG_ERROR, "connection lost: %d queued request%s dropped\n", dropped, dropped == 1 ? "" : "s");
     }
 
     context->msg_wrapper_head = NULL;
@@ -2554,7 +2563,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     }
     else
     {
-        fprintf(stderr, "Unknown protocol in connect-string: %s\n", ptr);
+        modbusmq_logf(LOG_ERROR, "Unknown protocol in connect-string: %s\n", ptr);
         return -2; // unknown connect type
     }
     
@@ -2618,7 +2627,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     }
     else
     {
-        fprintf(stderr, "Unknown protocol: %s\n", ptr);
+        modbusmq_logf(LOG_ERROR, "Unknown protocol: %s\n", ptr);
         return -1;
     }
     return 0;
@@ -3594,7 +3603,7 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
         *timer = (modbusmq_timer_t *)malloc(sizeof(modbusmq_timer_t));
     if (!timer)
     {
-        perror("Allocation error");
+        modbusmq_logf(LOG_ERROR, "Allocation error: %s\n", strerror(errno));
         assert(0);
         return -1;
     }
@@ -3896,7 +3905,7 @@ modbusmq_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
     }
     else
     {
-        fprintf(stderr, "modbusmq tcp/rtu context missing\n");
+        modbusmq_logf(LOG_ERROR, "modbusmq tcp/rtu context missing\n");
         assert(0);
         return -1;
     }
@@ -3937,7 +3946,7 @@ modbusmq_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
     }
     else
     {
-        fprintf(stderr, "modbusmq tcp/rtu context missing\n");
+        modbusmq_logf(LOG_ERROR, "modbusmq tcp/rtu context missing\n");
         assert(0);
         return -1;
     }
