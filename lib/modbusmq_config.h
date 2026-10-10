@@ -178,8 +178,20 @@ typedef enum modbusmq_query_mode_e
     modbusmq_query_mode_min       = 0,
     modbusmq_query_mode_parallell = 0, // parallell
     modbusmq_query_mode_series    = 1,  // series
+    modbusmq_query_mode_rounds    = 2,  // rounds: fast inputs every round, deep ones round-robin per slave
     modbusmq_query_mode_max 
 } modbusmq_query_mode_e;
+
+//
+// input.N.tier, for input.query_mode = rounds. A fast input is read in every
+// round; a deep input only in the round that visits its slave (and in every
+// round while its slave is the focus, see modbusmq_set_focus()).
+//
+typedef enum modbusmq_tier_e
+{
+    modbusmq_tier_fast = 0,
+    modbusmq_tier_deep = 1,
+} modbusmq_tier_e;
 
 //
 // info about one channel
@@ -286,6 +298,7 @@ typedef struct modbusmq_input_t
     int                 address_offset;
     int                 naddress;
     int                 interval;
+    int                 tier;      // modbusmq_tier_e, rounds mode only
     int                 channel_max;
     struct modbusmq_channel_t *channels;
 
@@ -439,6 +452,10 @@ typedef struct modbusmq_config_t
     int                 input_max;
     int                 offset_size;
     int                 query_mode;
+                                   // rounds mode: minimum period of one round
+                                   // in ms. 0 starts the next round as soon as
+                                   // the previous one has completed.
+    int                 round_interval_ms;
     modbusmq_input_t     *inputs;
 
     int                 write_max;

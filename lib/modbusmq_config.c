@@ -483,6 +483,10 @@ int modbusmq_config_query_mode(const char *key)
     {
         return modbusmq_query_mode_series;
     }
+    else if (strcmp(key, "rounds") == 0)
+    {
+        return modbusmq_query_mode_rounds;
+    }
 
     // you can also use numbers instead of text
     //
@@ -493,6 +497,23 @@ int modbusmq_config_query_mode(const char *key)
         return value;
     }
     
+    return -1;
+}
+
+//
+// input.N.tier: fast or deep, or 0/1. -1 for anything else.
+//
+int modbusmq_config_tier(const char *value)
+{
+    if (strcmp(value, "fast") == 0 || strcmp(value, "0") == 0)
+    {
+        return modbusmq_tier_fast;
+    }
+    else if (strcmp(value, "deep") == 0 || strcmp(value, "1") == 0)
+    {
+        return modbusmq_tier_deep;
+    }
+
     return -1;
 }
 
@@ -942,6 +963,17 @@ modbusmq_config_parse(const char *filename)
                 modbusmq_config->query_mode = modbusmq_query_mode_parallell;
             }
         }
+        else if (strcmp(key, "input.round_interval") == 0)
+        {
+            modbusmq_config->round_interval_ms = (int)strtol(value, NULL, 0);
+            if (modbusmq_config->round_interval_ms < 0)
+            {
+                fprintf(stderr, "%d: %s=%s: round_interval must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+        }
         else if (strcmp(key, "input.max") == 0)
         {
             if (modbusmq_config->inputs)
@@ -1029,6 +1061,17 @@ modbusmq_config_parse(const char *filename)
             else if (strcmp(input_key, "interval") == 0)
             {
                 input->interval = strtod(value, NULL);
+            }
+            else if (strcmp(input_key, "tier") == 0)
+            {
+                input->tier = modbusmq_config_tier(value);
+                if (input->tier < 0)
+                {
+                    fprintf(stderr, "%d: %s=%s: expected fast or deep\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
             }
             //
             // Per-input defaults for the publish rate-limiting keys. Same
@@ -1803,6 +1846,21 @@ modbusmq_config_parse(const char *filename)
     // onto their channels before anything runs, so the runtime never has to.
     //
     modbusmq_config_apply_publish_defaults(modbusmq_config);
+
+    //
+    // In rounds mode the round decides when an input is read, so a per-input
+    // interval means nothing. Say so rather than let it look honoured.
+    //
+    if (modbusmq_config->query_mode == modbusmq_query_mode_rounds)
+    {
+        for(int i = 0; i < modbusmq_config->input_max; ++i)
+        {
+            if (modbusmq_config->inputs[i].interval > 0)
+            {
+                fprintf(stderr, "WARNING: input.%d.interval is ignored in query_mode rounds\n", i+1);
+            }
+        }
+    }
 
     //
     // A coil or discrete input carries one bit per address, so its channels

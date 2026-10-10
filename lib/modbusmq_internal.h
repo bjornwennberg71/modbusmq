@@ -57,6 +57,11 @@ typedef struct modbusmq_timer_t
     millitime_t  timer_next_time;
     millitime_t  timer_interval;
     millitime_t  orig_interval;
+
+                 // rounds mode only: copied from the input this timer reads,
+                 // so a round can be put together without the config
+    int          tier;
+    int          slave;
     
     modbusmq_msg_t msg;
 
@@ -134,6 +139,17 @@ typedef struct modbusmq_context_t
     
     modbusmq_msg_wrapper_t *msg_wrapper_head; // queue of requests
     modbusmq_timer_t       *timer_head;       // queue of repeating requests
+
+                         // query_mode rounds. timer_head is then the round
+                         // list, in config order; a round is posted onto the
+                         // queue in one go and has completed when no
+                         // subscription is left on it.
+    int                   round_active;
+    millitime_t           round_start_ms;
+    uint32_t              round_count;
+    millitime_t           round_last_ms;    // duration of the last completed round
+    int                   round_deep_slave; // slave whose deep inputs the last round read, -1 none yet
+    int                   round_focus;      // slave whose deep inputs every round reads, -1 none
 
     int                   req_header_min;       // minimum number of bytes of header needed to compute the length
     int                   res_header_min;       // minimum number of bytes of header needed to compute the length

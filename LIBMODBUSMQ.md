@@ -313,6 +313,29 @@ it. `modbusmq_msg_tag()` formats the `[req 4711 slave 3 addr 0x01F4]` prefix tha
 every error line in the library carries. It returns a pointer to a static buffer:
 fine in a single-threaded library, but never use it twice in one `printf`.
 
+### Round mode and the focus slave
+
+With `input.query_mode = rounds` in the config (see "Round mode" in
+[config/CONFIG.md](config/CONFIG.md)) the same `modbusmq_subscribe()` calls
+build a round list instead of timers, and the interval argument is ignored.
+Each subscription takes its tier from the config input it reads. Callbacks fire
+exactly as in the other modes, and a failed request goes to the error callback
+and does not hold the round up.
+
+```c
+// also read slave 7's deep inputs in every round, e.g. while a UI shows it
+modbusmq_set_focus(context, 7);    // 0, or < 0: not rounds mode, or slave 7 has no deep input
+modbusmq_get_focus(context);       // 7; -1 when none
+modbusmq_set_focus(context, -1);   // back to round-robin only
+
+uint32_t rounds;
+int      last_ms;
+modbusmq_round_stats(context, &rounds, &last_ms);  // rounds started, duration of the last one
+```
+
+A focus change takes effect from the next round; the round already queued
+keeps the focus it started with.
+
 ---
 
 ## 7. Errors, and which ones are fatal

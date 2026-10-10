@@ -27,6 +27,7 @@ modbusmq.connect = tcp://192.168.1.50:502   # inline comment also works
 - [Inputs](#inputs)
   - [Declaring inputs](#declaring-inputs)
   - [Per-input keys](#per-input-keys)
+  - [Round mode](#round-mode)
 - [Bit inputs: coils and discrete inputs](#bit-inputs-coils-and-discrete-inputs)
 - [Channels](#channels)
   - [Per-channel keys](#per-channel-keys)
@@ -128,15 +129,18 @@ An **input** is one Modbus read request — a slave device, a register type, a s
 
 ```
 input.max        = 3       # number of inputs (1–1000)
-input.query_mode = series  # parallell (default) or series
+input.query_mode = series  # parallell (default), series or rounds
 ```
 
 | query_mode   | Behaviour |
 |--------------|-----------|
 | `parallell` (or `0`) | Each input polls independently at its own interval |
-| `series` (or `1`)    | Inputs poll one after another, staggered so they do not overlap |
+| `series` (or `1`)    | Inputs poll one after another, spread evenly over one cycle (the sum of all intervals) |
+| `rounds` (or `2`)    | Inputs poll in rounds: fast ones every round, deep ones one slave per round. See [Round mode](#round-mode) |
 
-Use `series` when all inputs share the same physical bus and simultaneous requests would cause collisions (typical for RTU multi-drop).
+Requests never collide in any mode: the library sends one request at a time and queues the rest. The modes differ
+only in when each input is due. Use `series` to spread the bus load evenly, and `rounds` for an RTU multi-drop bus
+with many devices (see [Round mode](#round-mode)).
 
 ### Per-input keys
 
@@ -148,7 +152,8 @@ input.N.type           = input_register   # see the table below
 input.N.address        = 0x0FFF           # start register address (hex or decimal)
 input.N.address_offset = 0        # registers/coils to skip at the start of the block, see below
 input.N.naddress       = 0x27             # number of registers to read
-input.N.interval       = 1000             # polling interval in milliseconds
+input.N.interval       = 1000             # polling interval in milliseconds (ignored in rounds mode)
+input.N.tier           = fast             # rounds mode only: fast (or 0, default) or deep (or 1)
 input.N.channel.max    = 13               # number of channels — must come before channel keys
 
 # Publish rate-limiting defaults for every channel on this input that does not
@@ -186,6 +191,57 @@ input.3.channel.1.offset = 2      # register 0x2001, still counted from 0x2000
 
 A channel that lands inside the skipped registers is outside the response and
 is reported as such, the same as any other out-of-range offset.
+
+### Round mode
+
+For an RTU multi-drop bus with many devices of one kind, e.g. 16 battery
+packs on one RS-485 line. Reading every register of every pack each cycle
+is too slow there, and most of it changes slowly anyway.
+
+```
+input.query_mode     = rounds
+input.round_interval = 1000   # ms, minimum period of one round; 0 (default) = back to back
+input.1.tier         = fast   # pack totals: every round
+input.2.tier         = deep   # cell voltages: one pack per round
+```
+
+A round is:
+
+1. every `fast` input, in config order;
+2. every `deep` input of the next slave in round-robin order (the slaves that
+   have deep inputs, in order of first appearance in the config);
+3. every `deep` input of the focus slave, when one is set and it is not the
+   slave of step 2. A program sets it with `modbusmq_set_focus()`, see
+   [LIBMODBUSMQ.md](../LIBMODBUSMQ.md).
+
+The next round starts when every request of this one has completed (answered,
+timed out or failed) **and** `round_interval` has passed since this one
+started. Requests go out one at a time, as in every mode. A write arriving from
+MQTT still goes out ahead of the polls left in the round. `input.N.interval` is
+ignored, and a warning says so when it is set.
+
+**Bus time at 9600 8N1.** A byte is 10 bits, so the line carries about 960
+bytes/s, about 1 ms per byte. A read of n registers is an 8-byte request and a
+5 + 2n byte response, plus about 30 ms of turnaround (the device's reply delay,
+the silent gaps and `rts_delay`). So:
+
+| read | bytes | time |
+|---|---|---|
+| 3 registers (pack totals) | 19 | ~50 ms |
+| 60 registers (cell block) | 133 | ~170 ms |
+
+16 packs with one 3-register fast block and two 60-register deep blocks each:
+
+- everything every cycle: 16 × (50 + 2 × 170) ≈ 6.2 s before a pack total is fresh again;
+- rounds: 16 × 50 + 2 × 170 ≈ 1.1 s per round, so pack totals are ~1.1 s old at
+  most and each pack's cells are ~18 s old at most (16 rounds); a focus pack
+  adds 340 ms per round and has its cells refreshed every round.
+
+The same numbers say how to lay out the blocks. One register of gap costs 2
+bytes, ~2 ms; one more transaction costs ~30 ms of turnaround on its own. So
+reading straight across a reserved gap of up to ~14 registers is cheaper than
+splitting the block in two around it (counting the extra request and response
+framing as well, the break-even is nearer 20).
 
 ---
 

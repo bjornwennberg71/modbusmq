@@ -202,6 +202,17 @@ extern void modbusmq_frame_debug(                 struct modbusmq_context_t *con
 extern int  modbusmq_post(                struct modbusmq_context_t *context, modbusmq_msg_t *msg);
 // subscribe to message every interval in ms
 extern int  modbusmq_subscribe(           struct modbusmq_context_t *context, modbusmq_msg_t *msg, int interval_ms);
+//
+// input.query_mode = rounds only. Every round then also reads the deep inputs
+// of this slave, on top of the slave the round-robin visits. -1 clears it.
+// Takes effect from the next round. Returns 0, or < 0 when the context is not
+// in rounds mode or no deep input has that slave.
+//
+extern int  modbusmq_set_focus(           struct modbusmq_context_t *context, int slave);
+// the focus slave, -1 for none
+extern int  modbusmq_get_focus(           struct modbusmq_context_t *context);
+// rounds started, and the duration of the last completed one; either pointer may be NULL
+extern int  modbusmq_round_stats(         struct modbusmq_context_t *context, uint32_t *round_count, int *last_round_ms);
 // send request and wait for response
 extern int  modbusmq_send(                struct modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait);
 

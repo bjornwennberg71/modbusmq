@@ -3508,6 +3508,50 @@ modbusmq_timer_id()
 
     
 /**
+ *
+ * @brief Find the config input a request reads.
+ *
+ * Matches on slave, function and address the way modbusmq_handle_msg() does,
+ * and returns the first match.
+ *
+ * @param context: allocated context, with a config set
+ * @param msg: request to look up; frame[0] is the request frame
+ *
+ * @return the input, or NULL when no input describes this request
+ */
+static modbusmq_input_t *
+modbusmq_msg_input(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    modbusmq_config_t
+        *config = context->config;
+
+    if (!config)
+    {
+        return NULL;
+    }
+
+    int
+        function = modbusmq_frame_function(context, &msg->frame[0]),
+        address  = modbusmq_frame_addr(    context, &msg->frame[0]),
+        slave    = modbusmq_frame_slave(   context, &msg->frame[0]);
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &config->inputs[i];
+
+        if (input->slave == slave    &&
+            input->type  == function &&
+            input->address + input->address_offset == address)
+        {
+            return input;
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * 
  * @brief Subscribe to a Modbusmq request at a fixed interval.
  * 
@@ -3537,7 +3581,14 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
         return -1;
     }
 
-    assert(interval > 0);
+    int
+        rounds = (context->config->query_mode == modbusmq_query_mode_rounds);
+
+    // a round decides when a rounds-mode subscription is read, not interval
+    if (!rounds)
+    {
+        assert(interval > 0);
+    }
     
     modbusmq_timer_t
         *timer = (modbusmq_timer_t *)malloc(sizeof(modbusmq_timer_t));
@@ -3557,9 +3608,44 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
     
     memcpy(&timer->msg, msg, sizeof(modbusmq_msg_t));
 
+    timer->slave = modbusmq_frame_slave(context, &msg->frame[0]);
+    timer->tier  = modbusmq_tier_fast;
+
+    if (rounds)
+    {
+        //
+        // The tier lives on the input, so find the input this request reads:
+        // the same slave, function and address match modbusmq_handle_msg()
+        // uses to route the answer back. A request no input describes is
+        // fast, so it is read every round rather than never.
+        //
+        modbusmq_input_t
+            *input = modbusmq_msg_input(context, msg);
+
+        if (input)
+        {
+            timer->tier = input->tier;
+        }
+    }
+
     if (!context->timer_head)
     {
         context->timer_head = timer;
+    }
+    else if (rounds)
+    {
+        //
+        // The round list is the config order: append. Rounds have no use for
+        // the interval arithmetic below.
+        //
+        modbusmq_timer_t
+            *tail = context->timer_head;
+
+        while(tail->next)
+        {
+            tail = tail->next;
+        }
+        tail->next = timer;
     }
     else
     {
@@ -3693,7 +3779,9 @@ modbusmq_timer_debug_print(modbusmq_context_t *context)
     
     while(elem)
     {
-        assert(elem->orig_interval > 0);
+        // a rounds-mode subscription has no interval of its own
+        assert(elem->orig_interval > 0 ||
+               (context->config && context->config->query_mode == modbusmq_query_mode_rounds));
 
         if (0)
         {
@@ -4311,6 +4399,270 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
 }
 
 /**
+ *
+ * @brief Whether the current round still has a poll on the queue.
+ *
+ * A round's polls are subscriptions, and one-shot posts never are, so a
+ * write the application posts mid-round neither holds the round open nor
+ * counts as part of it.
+ *
+ * @param context: allocated context
+ *
+ * @return 1 while a subscription is queued or in flight, 0 otherwise
+ */
+static int
+modbusmq_round_busy(modbusmq_context_t *context)
+{
+    modbusmq_msg_wrapper_t
+        *wrapper = context->msg_wrapper_head;
+
+    while(wrapper)
+    {
+        if (wrapper->flags == MODBUSMQ_MSG_SUBSCRIBE)
+        {
+            return 1;
+        }
+        wrapper = wrapper->next;
+    }
+
+    return 0;
+}
+
+/**
+ *
+ * @brief The slave whose deep inputs the next round reads.
+ *
+ * The slaves that have deep inputs, ordered by first appearance in the round
+ * list (the config order), visited round-robin: the one after the slave the
+ * last round read, wrapping, or the first one when no round has read any.
+ *
+ * @param context: allocated context
+ *
+ * @return a slave, or -1 when no input is deep
+ */
+static int
+modbusmq_round_next_deep_slave(modbusmq_context_t *context)
+{
+    int
+        order[256],
+        norder = 0;
+    uint8_t
+        seen[256];
+
+    memset(seen, 0, sizeof(seen));
+
+    for(modbusmq_timer_t *elem = context->timer_head; elem; elem = elem->next)
+    {
+        if (elem->tier != modbusmq_tier_deep || elem->slave < 0 || elem->slave > 255 || seen[elem->slave])
+        {
+            continue;
+        }
+        seen[elem->slave] = 1;
+        order[norder++]   = elem->slave;
+    }
+
+    if (norder == 0)
+    {
+        return -1;
+    }
+
+    for(int i = 0; i < norder; ++i)
+    {
+        if (order[i] == context->round_deep_slave)
+        {
+            return order[(i + 1) % norder];
+        }
+    }
+
+    return order[0];
+}
+
+/**
+ *
+ * @brief Queue the subscriptions of one tier, optionally of one slave only.
+ *
+ * @param context: allocated context
+ * @param tier: modbusmq_tier_fast or modbusmq_tier_deep
+ * @param slave: only this slave's, or -1 for every slave
+ *
+ * @return nothing
+ */
+static void
+modbusmq_round_post(modbusmq_context_t *context, int tier, int slave)
+{
+    for(modbusmq_timer_t *elem = context->timer_head; elem; elem = elem->next)
+    {
+        if (elem->tier != tier || (slave >= 0 && elem->slave != slave))
+        {
+            continue;
+        }
+
+        elem->msg.msg_id = elem->timer_id;
+        modbusmq_post_internal(context, &elem->msg, MODBUSMQ_MSG_SUBSCRIBE);
+    }
+}
+
+/**
+ *
+ * @brief The rounds-mode counterpart of the timer walk below.
+ *
+ * A round is posted onto the queue in one go: every fast input, then the
+ * deep inputs of the next slave in round-robin order, then the deep inputs of
+ * the focus slave when that is another one. The queue already sends one
+ * request at a time, from its head, and already lets a one-shot post jump
+ * ahead of queued polls, so a round needs neither of those built again.
+ *
+ * The round has completed when none of its polls is left on the queue,
+ * whether each one was answered, timed out or failed. The next one starts
+ * then, or once input.round_interval has passed since this one started,
+ * whichever is later.
+ *
+ * @param context: allocated context
+ * @param sleep_time: in/out, lowered to when the next round is due
+ *
+ * @return 0
+ */
+static int
+modbusmq_loop_prepare_rounds(modbusmq_context_t *context, millitime_t *sleep_time)
+{
+    millitime_t
+        millisleep = (*sleep_time > 0) ? *sleep_time : 1000,
+        time_now   = millitime();
+
+    if (context->round_active && !modbusmq_round_busy(context))
+    {
+        context->round_active  = 0;
+        context->round_last_ms = time_now - context->round_start_ms;
+    }
+
+    if (!context->round_active && context->timer_head)
+    {
+        millitime_t
+            due = context->round_start_ms + (millitime_t)context->config->round_interval_ms;
+
+        if (time_now >= due)
+        {
+            int
+                deep_slave = modbusmq_round_next_deep_slave(context);
+
+            context->round_active   = 1;
+            context->round_start_ms = time_now;
+            context->round_count++;
+
+            modbusmq_round_post(context, modbusmq_tier_fast, -1);
+
+            if (deep_slave >= 0)
+            {
+                modbusmq_round_post(context, modbusmq_tier_deep, deep_slave);
+                context->round_deep_slave = deep_slave;
+            }
+
+            if (context->round_focus >= 0 && context->round_focus != deep_slave)
+            {
+                modbusmq_round_post(context, modbusmq_tier_deep, context->round_focus);
+            }
+        }
+        else
+        {
+            millisleep = MODBUSMQ_MIN(millisleep, due - time_now);
+        }
+    }
+
+    *sleep_time = millisleep;
+    return 0;
+}
+
+/**
+ *
+ * @brief Read every round the deep inputs of one slave as well.
+ *
+ * @param context: allocated context, query_mode rounds
+ * @param slave: the slave, or -1 for none
+ *
+ * @return 0 on success, < 0 when not in rounds mode or no deep input has
+ *         that slave
+ */
+int
+modbusmq_set_focus(modbusmq_context_t *context, int slave)
+{
+    if (!context || !context->config || context->config->query_mode != modbusmq_query_mode_rounds)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (slave == -1)
+    {
+        context->round_focus = -1;
+        return 0;
+    }
+
+    for(modbusmq_timer_t *elem = context->timer_head; elem; elem = elem->next)
+    {
+        if (elem->tier == modbusmq_tier_deep && elem->slave == slave)
+        {
+            context->round_focus = slave;
+            return 0;
+        }
+    }
+
+    errno = ENOENT;
+    return -1;
+}
+
+/**
+ *
+ * @brief The focus slave set by modbusmq_set_focus().
+ *
+ * @param context: allocated context
+ *
+ * @return the slave, or -1 for none
+ */
+int
+modbusmq_get_focus(modbusmq_context_t *context)
+{
+    if (!context)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return context->round_focus;
+}
+
+/**
+ *
+ * @brief Round counters, for a status page.
+ *
+ * @param context: allocated context
+ * @param round_count: out, rounds started since the context was created; may be NULL
+ * @param last_round_ms: out, duration of the last completed round; may be NULL
+ *
+ * @return 0 on success, < 0 on bad arguments
+ */
+int
+modbusmq_round_stats(modbusmq_context_t *context, uint32_t *round_count, int *last_round_ms)
+{
+    if (!context)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (round_count)
+    {
+        *round_count = context->round_count;
+    }
+
+    if (last_round_ms)
+    {
+        *last_round_ms = (int)context->round_last_ms;
+    }
+
+    return 0;
+}
+
+/**
  * 
  * @brief Prepare poll() events for active Modbusmq subscriptions.
  * 
@@ -4335,6 +4687,11 @@ modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sle
     // gets the 1000 ms default. A caller with its own timer due sooner passes
     // that instead and gets it back untouched when no subscription beats it.
     //
+    if (context->config && context->config->query_mode == modbusmq_query_mode_rounds)
+    {
+        return modbusmq_loop_prepare_rounds(context, sleep_time);
+    }
+
     millitime_t millisleep = (*sleep_time > 0) ? *sleep_time : 1000;
 
     //    modbusmq_timer_debug_print(context);

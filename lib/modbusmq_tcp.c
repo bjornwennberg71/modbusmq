@@ -98,6 +98,8 @@ modbusmq_tcp_context(const char *pzConnectString)
         exit(2);
     }
     memset(context, 0, sizeof(modbusmq_context_t));
+    context->round_deep_slave = -1;
+    context->round_focus      = -1;
 
     //
     // fd 0 is a real descriptor (a process started with stdin closed gets

@@ -37,6 +37,7 @@ real code path. Exit status is 0 only if every check passed.
 | `test_scaling.c` | decoders and encoders and their round trips, connect string parsing, `modbusmq_strerror`, `modbusmq_channel_format_value`, the publish policy, `modbusmq_write_encode`, `modbusmq_write_encode_block`, `modbusmq_exception_string` | no |
 | `test_read.c` | all four input types end to end: framing, transport, response validation, byte order, scaling | yes |
 | `test_loop.c` | `modbusmq_loop_prepare`/`modbusmq_loop_write_read`, subscriptions and callbacks, one-shot posts, the `sleep_time` in/out contract, teardown | yes |
+| `test_rounds.c` | `input.query_mode = rounds` on `rounds.config` (4 slaves × 1 fast + 2 deep): request order per round, round-robin, focus, `round_interval`, a failing read inside a round, a one-shot write overtaking the round's remaining polls | yes |
 | `run_tests.sh` | the above, plus config validation (block write layout: gaps, overlaps, offsets) and the command line: `modbusmq_query` round trip, `--version` agreeing with the header, and `-e` override behaviour | — |
 | `run_matrix.sh` | builds and runs all of it with `MQTT_ENABLED` off and on, failing on any compiler warning | — |
 

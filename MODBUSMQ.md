@@ -98,6 +98,10 @@ keys they cover. They are also the only keys that refuse to be repeated.
 
 On a shared RS-485 bus set `input.query_mode = series` so blocks do not transmit
 over each other.
+With many devices on one slow bus, `input.query_mode = rounds` reads the small
+`fast` blocks of every device each round and the big `deep` ones for one device
+per round: see "Round mode" in [config/CONFIG.md](config/CONFIG.md) and
+`config/example_rounds.config`.
 
 ---
 

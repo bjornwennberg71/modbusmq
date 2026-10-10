@@ -72,6 +72,7 @@ bad()  { FAIL=$((FAIL+1)); echo "  FAIL $1"; }
 run_program()
 {
     local name=$1
+    local config=${2:-$CONFIG}
     local bin="$BUILD/test/$name"
 
     if [ ! -x "$bin" ]; then
@@ -81,7 +82,7 @@ run_program()
 
     # timeout, not just for tidiness: a regression in the send-timeout clamping
     # would hang rather than fail, and a hung test wedges CI instead of failing it
-    timeout 60 "$bin" "$CONFIG" > "$TMP/$name.log" 2>&1
+    timeout 60 "$bin" "$config" > "$TMP/$name.log" 2>&1
     local rc=$?
 
     if [ $rc -eq 0 ]; then
@@ -170,6 +171,7 @@ echo
 echo "integration tests"
 run_program test_read
 run_program test_loop
+run_program test_rounds "$HERE/rounds.config"
 echo
 
 #
@@ -451,6 +453,26 @@ write.1.channel.1.offset = 0
 write.1.channel.1.format = uint_ab
 write.1.channel.2.offset = 2
 write.1.channel.2.format = uint_ab"
+
+#
+# query_mode rounds. The order itself is test_rounds' job; these are the keys.
+#
+bad_config "an unknown tier is rejected" "expected fast or deep" \
+    "input.query_mode = rounds
+input.1.tier = medium"
+
+bad_config "a negative round_interval is rejected" "round_interval must not be negative" \
+    "input.query_mode = rounds
+input.round_interval = -1"
+
+# the fixture header sets input.1.interval, which a round has no use for
+bad_config "interval in rounds mode warns that it is ignored" "input.1.interval is ignored" \
+    "input.query_mode = rounds"
+
+good_config "rounds, tier and round_interval in their numeric forms are accepted" \
+    "input.query_mode = 2
+input.round_interval = 500
+input.1.tier = 1"
 
 echo
 echo "--------------------------------"

@@ -120,6 +120,7 @@ Example configs included:
 - `polarium.config`  
 - `shoto.config`
 - `example1.config` → `example4.config`, graded from minimal to fully fledged
+- `example_rounds.config`, four battery packs on one RS-485 bus in `input.query_mode = rounds`
 
 ---
 
