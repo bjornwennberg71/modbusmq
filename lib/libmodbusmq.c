@@ -599,7 +599,7 @@ modbusmq_frame_debug(modbusmq_context_t *context, modbusmq_frame_t *frame)
     {
         sprintf(azLine, "xmit = %d\n", frame->xmit);
     }
-    modbusmq_logf(LOG_INFO, azLine);
+    modbusmq_logf(LOG_INFO, "%s", azLine);
 }
 
 /**
@@ -4843,16 +4843,16 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         if (request_sent && (time_now - context->last_write_ms) >= context->frame_timeout_ms)
         {
             // discard this packages
-            modbusmq_logf(LOG_ERROR, "%s no response within %d ms. action: discard request and continue\n",
+            modbusmq_logf(LOG_ERROR, "%s no response within %llu ms. action: discard request and continue\n",
                           modbusmq_msg_tag(context, &wrapper->msg),
-                          context->frame_timeout_ms);
+                          (unsigned long long)context->frame_timeout_ms);
 
             modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TIMEOUT);
 
             if (modbusmq_debug)
             {
                 // modbusmq_logf(LOG_ERROR, "res.res_length = %d\nres.res_received = %d\n", wrapper->msg.res_length, wrapper->msg.res_xmit);
-                modbusmq_logf(LOG_ERROR, "time_diff_ms = %d\n", (time_now - context->last_write_ms));
+                modbusmq_logf(LOG_ERROR, "time_diff_ms = %llu\n", (unsigned long long)(time_now - context->last_write_ms));
             }
             
             if (modbusmq_debug)
@@ -4896,9 +4896,9 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
             // from post would discard it the moment it reached the head on
             // a slow RTU link, before it ever had a chance to go out.
             //
-            modbusmq_logf(LOG_ERROR, "%s not sent within %d ms, the link never became writable. action: discard request and continue\n",
+            modbusmq_logf(LOG_ERROR, "%s not sent within %llu ms, the link never became writable. action: discard request and continue\n",
                           modbusmq_msg_tag(context, &wrapper->msg),
-                          context->frame_timeout_ms);
+                          (unsigned long long)context->frame_timeout_ms);
 
             modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TIMEOUT);
 

@@ -15,7 +15,7 @@
 extern "C" {
 #endif
     
-extern void modbusmq_logf(int loglevel, const char *format, ...);
+extern void modbusmq_logf(int loglevel, const char *format, ...) __attribute__((format(printf, 2, 3)));
 
 #ifdef __cplusplus
 }
