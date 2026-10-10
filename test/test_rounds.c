@@ -165,7 +165,7 @@ pump_until(struct modbusmq_context_t *context, uint32_t stop_round)
 
         if (after != before && after < ROUND_MAX)
         {
-            round_start[after] = millitime();
+            modbusmq_round_start(context, &round_start[after]);
             round_focus[after] = modbusmq_get_focus(context);
         }
 

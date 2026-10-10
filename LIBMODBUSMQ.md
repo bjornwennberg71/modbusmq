@@ -331,6 +331,9 @@ modbusmq_set_focus(context, -1);   // back to round-robin only
 uint32_t rounds;
 int      last_ms;
 modbusmq_round_stats(context, &rounds, &last_ms);  // rounds started, duration of the last one
+
+millitime_t start;
+modbusmq_round_start(context, &start);            // millitime() when the current round started
 ```
 
 A focus change takes effect from the next round; the round already queued

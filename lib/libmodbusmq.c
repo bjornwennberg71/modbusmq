@@ -4703,6 +4703,28 @@ modbusmq_round_stats(modbusmq_context_t *context, uint32_t *round_count, int *la
 }
 
 /**
+ *
+ * @brief Start time of the current or last round, on the millitime() clock.
+ *
+ * @param context: allocated context
+ * @param start_ms: out, millitime() when the round started; 0 before the first round
+ *
+ * @return 0 on success, < 0 on bad arguments
+ */
+int
+modbusmq_round_start(modbusmq_context_t *context, millitime_t *start_ms)
+{
+    if (!context || !start_ms)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *start_ms = context->round_start_ms;
+    return 0;
+}
+
+/**
  * 
  * @brief Prepare poll() events for active Modbusmq subscriptions.
  * 

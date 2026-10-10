@@ -216,6 +216,8 @@ extern int  modbusmq_module_slave(        struct modbusmq_context_t *context, in
 extern int  modbusmq_get_focus(           struct modbusmq_context_t *context);
 // rounds started, and the duration of the last completed one; either pointer may be NULL
 extern int  modbusmq_round_stats(         struct modbusmq_context_t *context, uint32_t *round_count, int *last_round_ms);
+// millitime() at which the current or last round started; 0 before the first round
+extern int  modbusmq_round_start(         struct modbusmq_context_t *context, millitime_t *start_ms);
 // send request and wait for response
 extern int  modbusmq_send(                struct modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait);
 
