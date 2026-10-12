@@ -221,7 +221,7 @@ pending_write_add(uint32_t req_id, int write_index, const char *value)
             // oldest instead -- it is the one the frame timeout is about to
             // answer anyway -- and say so.
             //
-            modbusmq_logf(LOG_ERROR, "ack: out of memory for %d writes waiting for an answer, dropping the oldest (req %u)\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "ack: out of memory for %d writes waiting for an answer, dropping the oldest (req %u)\n",
                           GI.npending, GI.pending[0].req_id);
 
             memmove(&GI.pending[0], &GI.pending[1], (size_t)(GI.pending_max - 1) * sizeof(GI.pending[0]));
@@ -229,7 +229,7 @@ pending_write_add(uint32_t req_id, int write_index, const char *value)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "ack: out of memory, write req %u goes out unacked\n", req_id);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "ack: out of memory, write req %u goes out unacked\n", req_id);
             return;
         }
     }
@@ -308,7 +308,7 @@ mqtt_write_result(const modbusmq_write_t *write, uint32_t req_id, const char *st
 
     if (!GI.has_mqtt || !GI.mqtt_connected)
     {
-        modbusmq_logf(LOG_ERROR, "ack %s: not connected to the broker. action: ack dropped\n", write->ack_topic);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "ack %s: not connected to the broker. action: ack dropped\n", write->ack_topic);
         return;
     }
 
@@ -372,17 +372,17 @@ mqtt_write_result(const modbusmq_write_t *write, uint32_t req_id, const char *st
 
     if (rc == MOSQ_ERR_NO_CONN || rc == MOSQ_ERR_CONN_LOST)
     {
-        modbusmq_logf(LOG_INFO, "MQTT: lost connection while publishing an ack, will reconnect\n");
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: lost connection while publishing an ack, will reconnect\n");
         GI.mqtt_connected = 0;
         return;
     }
     if (rc != MOSQ_ERR_SUCCESS)
     {
-        modbusmq_logf(LOG_ERROR, "MQTT: unable to publish ack to %s (rc=%d)\n", write->ack_topic, rc);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "MQTT: unable to publish ack to %s (rc=%d)\n", write->ack_topic, rc);
         return;
     }
 
-    modbusmq_logf(LOG_DEBUG, "%s=%s\n", write->ack_topic, payload);
+    modbusmq_logf(MODBUSMQ_LOG_DEBUG, "%s=%s\n", write->ack_topic, payload);
 }
 
 static void
@@ -450,7 +450,7 @@ modbusmq_message_callback(struct modbusmq_context_t *context, modbusmq_msg_t *ms
     const modbusmq_write_t
         *write = &modbusmq_config->writes[pending->write_index];
 
-    modbusmq_logf(LOG_INFO, "write %s: slave %d %s req %u\n",
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "write %s: slave %d %s req %u\n",
                   write->name ? write->name : write->topic,
                   modbusmq_frame_slave(context, &msg->frame[0]),
                   modbusmq_msg_broadcast(context, msg) ? "broadcast" : "accepted",
@@ -507,7 +507,7 @@ modbusmq_error_callback(struct modbusmq_context_t *context, modbusmq_msg_t *msg,
         break;
     }
 
-    modbusmq_logf(LOG_ERROR, "slave %d (addr 0x%04X, req %u) %s\n",
+    modbusmq_logf(MODBUSMQ_LOG_ERROR, "slave %d (addr 0x%04X, req %u) %s\n",
                   modbusmq_frame_slave(context, &msg->frame[0]),
                   modbusmq_frame_addr(context, &msg->frame[0]),
                   msg->req_id,
@@ -607,7 +607,7 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
 
         if (modbusmq_channel_publish_decide(channel, f, value, millitime()) == 0)
         {
-            modbusmq_logf(LOG_DEBUG, "%s=%s suppressed (unchanged or too soon)\n", channel->topic, value);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "%s=%s suppressed (unchanged or too soon)\n", channel->topic, value);
             continue;
         }
 
@@ -628,7 +628,7 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
                 rc = mosquitto_publish(GI.mosq, NULL, channel->topic, strlen(value), value, qos, retain);
             if (rc == MOSQ_ERR_NO_CONN || rc == MOSQ_ERR_CONN_LOST)
             {
-                modbusmq_logf(LOG_INFO, "MQTT: lost connection while publishing, will reconnect\n");
+                modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: lost connection while publishing, will reconnect\n");
                 GI.mqtt_connected = 0;
             }
             else if (rc != MOSQ_ERR_SUCCESS)
@@ -637,7 +637,7 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
             }
         }
 #endif
-        modbusmq_logf(LOG_INFO, "%s=%s\n", channel->topic, value);
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "%s=%s\n", channel->topic, value);
     }
     fflush(stdout);
 }
@@ -749,7 +749,7 @@ mqtt_payload_value(const modbusmq_write_t *write, const char *payload, double *o
     return 0;
 
 fail:
-    modbusmq_logf(LOG_ERROR, "write %s: %s. action: skip write\n", name, why);
+    modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: %s. action: skip write\n", name, why);
     return -1;
 }
 
@@ -854,7 +854,7 @@ mqtt_payload_block(const modbusmq_write_t *write, const char *payload, double *v
     return n;
 
 fail:
-    modbusmq_logf(LOG_ERROR, "write %s: %s. action: skip write\n", name, why);
+    modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: %s. action: skip write\n", name, why);
     return -1;
 }
 
@@ -888,7 +888,7 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 
     if (!GI.modbus_connected)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: device is not connected. action: skip write\n", name);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: device is not connected. action: skip write\n", name);
         mqtt_write_nack(write, 0, "offline", "not connected to the device", 0);
         return -1;
     }
@@ -941,7 +941,7 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
             }
         }
 
-        modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X..0x%04X = %s%s\n",
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "write %s: slave %d reg 0x%04X..0x%04X = %s%s\n",
                       name, write->slave, write->address, write->address + nregs - 1,
                       written, (nvalues < 0) ? " (defaults)" : "");
     }
@@ -963,7 +963,7 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 
         modbusmq_frame_write_coil_bit(context, &msg.frame[0], write->address, on);
         snprintf(written, sizeof(written), "%d", on);
-        modbusmq_logf(LOG_INFO, "write %s: slave %d coil 0x%04X = %d\n", name, write->slave, write->address, on);
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "write %s: slave %d coil 0x%04X = %d\n", name, write->slave, write->address, on);
     }
     else
     {
@@ -993,13 +993,13 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
         if (nregs == 1 && write->function != modbusmq_write_function_registers)
         {
             modbusmq_frame_write_register(context, &msg.frame[0], write->address, regs[0]);
-            modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X)\n",
+            modbusmq_logf(MODBUSMQ_LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X)\n",
                           name, write->slave, write->address, value, regs[0]);
         }
         else
         {
             modbusmq_frame_write_registers(context, &msg.frame[0], write->address, nregs, regs);
-            modbusmq_logf(LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X%04X)\n",
+            modbusmq_logf(MODBUSMQ_LOG_INFO, "write %s: slave %d reg 0x%04X = %.6g (raw 0x%04X%04X)\n",
                           name, write->slave, write->address, value, regs[0], regs[1]);
         }
     }
@@ -1008,7 +1008,7 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
         rc = modbusmq_post(context, &msg);
     if (rc != 0)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: unable to queue the request, rc=%d\n", name, rc);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: unable to queue the request, rc=%d\n", name, rc);
         mqtt_write_nack(write, 0, "queue", "the request could not be queued", 0);
         return -1;
     }
@@ -1060,7 +1060,7 @@ mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosqu
 
     if (len < 0 || len >= (int)sizeof(payload))
     {
-        modbusmq_logf(LOG_ERROR, "MQTT: %s: payload of %d bytes is too long. action: ignore\n", message->topic, message->payloadlen);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "MQTT: %s: payload of %d bytes is too long. action: ignore\n", message->topic, message->payloadlen);
         return;
     }
     if (len > 0)
@@ -1124,7 +1124,7 @@ mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosqu
 
     if (!matched)
     {
-        modbusmq_logf(LOG_ERROR, "MQTT: %s: no write entry for this topic. action: ignore\n", message->topic);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "MQTT: %s: no write entry for this topic. action: ignore\n", message->topic);
     }
 }
 
@@ -1164,12 +1164,12 @@ mqtt_subscribe_writes(void)
             rc = mosquitto_subscribe(GI.mosq, NULL, write->topic, 1);
         if (rc != MOSQ_ERR_SUCCESS)
         {
-            modbusmq_logf(LOG_ERROR, "MQTT: unable to subscribe to %s (rc=%d)\n", write->topic, rc);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "MQTT: unable to subscribe to %s (rc=%d)\n", write->topic, rc);
             rc_all = -1;
             continue;
         }
 
-        modbusmq_logf(LOG_INFO, "MQTT: subscribed to %s -> %s%s%s\n",
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: subscribed to %s -> %s%s%s\n",
                       write->topic, write->name ? write->name : "write",
                       write->ack_topic ? ", ack on " : "",
                       write->ack_topic ? write->ack_topic : "");
@@ -1308,12 +1308,12 @@ mqtt_try_reconnect(modbusmq_connect_t *connect)
  
     GI.mqtt_reconnect_at_ms = now + MQTT_RECONNECT_INTERVAL_MS;
  
-    modbusmq_logf(LOG_INFO, "MQTT: attempting reconnect to %s:%d\n", connect->device, connect->port);
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: attempting reconnect to %s:%d\n", connect->device, connect->port);
  
     int rc = mosquitto_reconnect(GI.mosq);
     if (rc == MOSQ_ERR_SUCCESS)
     {
-        modbusmq_logf(LOG_INFO, "MQTT: reconnected successfully\n");
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: reconnected successfully\n");
         GI.mqtt_connected = 1;
         //
         // This is a clean session, so the broker kept none of our
@@ -1332,7 +1332,7 @@ mqtt_try_reconnect(modbusmq_connect_t *connect)
         return 1;
     }
  
-    modbusmq_logf(LOG_INFO, "MQTT: reconnect failed (rc=%d), will retry in %d ms\n", rc, MQTT_RECONNECT_INTERVAL_MS);
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: reconnect failed (rc=%d), will retry in %d ms\n", rc, MQTT_RECONNECT_INTERVAL_MS);
     return 0;
 }
 #endif
@@ -1654,7 +1654,7 @@ main(int argc, char **argv)
                     // treat this the same as a failed poll/read below and
                     // fall back into the reconnect path instead of polling
                     // a stale descriptor.
-                    modbusmq_logf(LOG_ERROR, "Modbus: connection lost, will reconnect\n");
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "Modbus: connection lost, will reconnect\n");
                     modbusmq_reset_queue(context);
                     GI.modbus_connected = 0;
                     GI.modbus_reconnect_at_ms = time_now + MODBUS_RECONNECT_INTERVAL_MS;
@@ -1715,7 +1715,7 @@ main(int argc, char **argv)
 
             if (rc < 0)
             {
-                modbusmq_logf(LOG_ERROR, "poll failed: rc = %d, errno=%d, str=%s\n", rc, errno, strerror(errno));
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "poll failed: rc = %d, errno=%d, str=%s\n", rc, errno, strerror(errno));
                 exit(2);
             }
 
@@ -1737,11 +1737,11 @@ main(int argc, char **argv)
                         // would throw away every other subscription's progress
                         // over one bad frame. Report it and keep polling.
                         //
-                        modbusmq_logf(LOG_ERROR, "modbusmq_loop_write_read: frame rejected, stream resynced, continuing with next request\n");
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq_loop_write_read: frame rejected, stream resynced, continuing with next request\n");
                     }
                     else if (rc < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "modbusmq_loop_write_read: error rc=%d, err=%s. Disconnecting, will reconnect\n", rc, strerror(errno));
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq_loop_write_read: error rc=%d, err=%s. Disconnecting, will reconnect\n", rc, strerror(errno));
                         modbusmq_close(context);
                         modbusmq_reset_queue(context);
                         GI.modbus_connected = 0;
@@ -1752,15 +1752,15 @@ main(int argc, char **argv)
             else if (time_now >= GI.modbus_reconnect_at_ms)
             {
                 GI.modbus_reconnect_at_ms = time_now + MODBUS_RECONNECT_INTERVAL_MS;
-                modbusmq_logf(LOG_INFO, "Modbus: attempting reconnect\n");
+                modbusmq_logf(MODBUSMQ_LOG_INFO, "Modbus: attempting reconnect\n");
                 if (modbusmq_connect(context) == 0)
                 {
-                    modbusmq_logf(LOG_INFO, "Modbus: reconnected successfully\n");
+                    modbusmq_logf(MODBUSMQ_LOG_INFO, "Modbus: reconnected successfully\n");
                     GI.modbus_connected = 1;
                 }
                 else
                 {
-                    modbusmq_logf(LOG_INFO, "Modbus: reconnect failed, will retry in %d ms\n", MODBUS_RECONNECT_INTERVAL_MS);
+                    modbusmq_logf(MODBUSMQ_LOG_INFO, "Modbus: reconnect failed, will retry in %d ms\n", MODBUS_RECONNECT_INTERVAL_MS);
                 }
             }
 
@@ -1779,7 +1779,7 @@ main(int argc, char **argv)
                     if (mosq_fd < 0)
                     {
                         // Socket gone — mark as disconnected
-                        modbusmq_logf(LOG_INFO, "MQTT: socket lost, will reconnect\n");
+                        modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: socket lost, will reconnect\n");
                         GI.mqtt_connected = 0;
                         GI.mqtt_reconnect_at_ms = millitime() + MQTT_RECONNECT_INTERVAL_MS;
                     }
@@ -1789,7 +1789,7 @@ main(int argc, char **argv)
                         rc = mosquitto_loop_read(GI.mosq, 1);
                         if (rc == MOSQ_ERR_CONN_LOST || rc == MOSQ_ERR_NO_CONN)
                         {
-                            modbusmq_logf(LOG_INFO, "MQTT: connection lost, will reconnect\n");
+                            modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: connection lost, will reconnect\n");
                             GI.mqtt_connected = 0;
                             GI.mqtt_reconnect_at_ms = millitime() + MQTT_RECONNECT_INTERVAL_MS;
                         }

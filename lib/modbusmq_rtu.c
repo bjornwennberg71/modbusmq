@@ -79,7 +79,7 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
     assert(context);
     if (!context)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq context: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate modbusmq context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context, 0, sizeof(modbusmq_context_t));
@@ -132,7 +132,7 @@ modbusmq_rtu_context(const char *device, int baud, char parity, int databit, int
     assert(context->rtu);
     if (!context->rtu)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq_rtu context: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate modbusmq_rtu context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context->rtu, 0, sizeof(modbusmq_rtu_context_t));
@@ -275,7 +275,7 @@ modbusmq_rtu_flush(modbusmq_context_t *context)
             {
                 continue;
             }
-            modbusmq_logf(LOG_ERROR, "rtu_flush: poll failed: %s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "rtu_flush: poll failed: %s\n", strerror(errno));
             return -1;
         }
 
@@ -292,13 +292,13 @@ modbusmq_rtu_flush(modbusmq_context_t *context)
         }
         else if (rc < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
         {
-            modbusmq_logf(LOG_ERROR, "rtu_flush: read failed: %s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "rtu_flush: read failed: %s\n", strerror(errno));
             return -1;
         }
 
         if (millitime() >= deadline_ms)
         {
-            modbusmq_logf(LOG_ERROR, "rtu_flush: line still busy after %d ms, discarded %d bytes and giving up on resync\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "rtu_flush: line still busy after %d ms, discarded %d bytes and giving up on resync\n",
                           (int)max_drain_ms, ntotal);
             break;
         }
@@ -306,7 +306,7 @@ modbusmq_rtu_flush(modbusmq_context_t *context)
 
     if (ntotal > 0)
     {
-        modbusmq_logf(LOG_INFO, "rtu_flush: discarded %d stale bytes, stream resynced\n", ntotal);
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "rtu_flush: discarded %d stale bytes, stream resynced\n", ntotal);
     }
 
     return ntotal;
@@ -470,7 +470,7 @@ modbusmq_rtu_crc16(const uint8_t *buf, int buflen)
 int
 modbusmq_rtu_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 {
-    //modbusmq_logf(LOG_INFO, "%s:%d:%s\n", __FILE__, __LINE__, __FUNCTION__);
+    //modbusmq_logf(MODBUSMQ_LOG_INFO, "%s:%d:%s\n", __FILE__, __LINE__, __FUNCTION__);
     // Assert RTS (driver-enable) before transmitting — standard polarity
     // for RTS-controlled half-duplex RS485 adapters. Give the transceiver
     // a brief moment to switch into transmit mode before data goes out.
@@ -502,7 +502,7 @@ modbusmq_rtu_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
     usleep(context->rts_delay_us);
     modbusmq_rtu_ioctl_rts(fd, 0);
 
-    //modbusmq_logf(LOG_INFO, "%s:%d:%s rc=%d\n", __FILE__, __LINE__, __FUNCTION__, rc);
+    //modbusmq_logf(MODBUSMQ_LOG_INFO, "%s:%d:%s rc=%d\n", __FILE__, __LINE__, __FUNCTION__, rc);
     return rc;
 }
 
@@ -562,7 +562,7 @@ modbusmq_rtu_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
     if (rc == -1)
     {
-        modbusmq_logf(LOG_DEBUG, "modbusmq_rtu_read: %d bytes, errno=%d\n", rc, errno);
+        modbusmq_logf(MODBUSMQ_LOG_DEBUG, "modbusmq_rtu_read: %d bytes, errno=%d\n", rc, errno);
         if (errno == EAGAIN || errno == EWOULDBLOCK)
         {
             rc = 0;
@@ -602,7 +602,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
         sd = open(rtu->device, O_RDWR | O_NOCTTY | O_NDELAY | O_EXCL | O_CLOEXEC);
     if (sd < 0)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to open device: %s, err=%s\n", rtu->device, strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to open device: %s, err=%s\n", rtu->device, strerror(errno));
         return -1;
     }
 
@@ -615,7 +615,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
     rc = tcgetattr(sd, &tios);
     if (rc < 0)
     {
-        modbusmq_logf(LOG_ERROR, "tcgetattr: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "tcgetattr: %s\n", strerror(errno));
         close(sd);
         return -1;
     }
@@ -715,7 +715,7 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
     rc = tcsetattr(sd, TCSANOW, &tios);
     if (rc < 0)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to set termios on device %s, rc=%d, err=%s\n", rtu->device, rc, strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to set termios on device %s, rc=%d, err=%s\n", rtu->device, rc, strerror(errno));
         close(sd);
         return -1;
     }
@@ -1121,7 +1121,7 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
                       modbusmq_msg_tag(context, msg), writer->buf[0], reader->buf[0]);
         return -2;
     }
@@ -1146,7 +1146,7 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         {
             if (reader->xmit >= 3)
             {
-                modbusmq_logf(LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X\n",
                               modbusmq_msg_tag(context, msg), reader->buf[2], writer->buf[1]);
             }
             reader->length = 5;
@@ -1155,7 +1155,7 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
                       modbusmq_msg_tag(context, msg), writer->buf[1], reader->buf[1]);
         return -3;
     }
@@ -1189,7 +1189,7 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
     }
     else if (reader->buf[2] != expected_nbytes)
     {
-        modbusmq_logf(LOG_ERROR, "%s byte count mismatch for function 0x%02X: "
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s byte count mismatch for function 0x%02X: "
                                  "requested %d bytes, response declares %d. "
                                  "action: discard frame and resync\n",
                       modbusmq_msg_tag(context, msg), writer->buf[1],
@@ -1203,7 +1203,7 @@ modbusmq_rtu_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
 
     if (newlen < 0 || newlen > MODBUSMQ_FRAME_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "%s invalid frame length %d. action: discard frame and resync\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s invalid frame length %d. action: discard frame and resync\n",
                       modbusmq_msg_tag(context, msg), newlen);
         return -5;
     }
@@ -1373,7 +1373,7 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     // shorter would index behind buf[] on the CRC check below.
     if (reader->length < 4)
     {
-        modbusmq_logf(LOG_ERROR, "%s response too short: %d bytes. action: discard frame\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s response too short: %d bytes. action: discard frame\n",
                       modbusmq_msg_tag(context, msg), reader->length);
         return -3;
     }
@@ -1382,7 +1382,7 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     // must never reach the data decoders as if it were a reply to the read.
     if (reader->buf[1] & 0x80)
     {
-        modbusmq_logf(LOG_ERROR, "%s exception response (code %d) for function 0x%02X. action: discard frame\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s exception response (code %d) for function 0x%02X. action: discard frame\n",
                       modbusmq_msg_tag(context, msg), reader->buf[2], writer->buf[1]);
         return -4;
     }
@@ -1392,7 +1392,7 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
     int crc_compute = modbusmq_rtu_crc16(reader->buf, reader->length - 2);
     if (crc_res != crc_compute)
     {
-        modbusmq_logf(LOG_ERROR, "%s CRC mismatch: computed 0x%04X, frame carries 0x%04X "
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s CRC mismatch: computed 0x%04X, frame carries 0x%04X "
                                  "(res slave %d function 0x%02X). action: discard frame and resync\n",
                       modbusmq_msg_tag(context, msg), crc_compute, crc_res,
                       reader->buf[0], reader->buf[1]);

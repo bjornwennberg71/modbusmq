@@ -255,7 +255,7 @@ modbusmq_config_dataformat(const char *value)
     // see and fix, not grounds for aborting the process — and with NDEBUG set
     // the assert vanished and left format 0 to be discovered much later.
     //
-    modbusmq_logf(LOG_ERROR, "Unsupported format: %s\n", value);
+    modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unsupported format: %s\n", value);
     return modbusmq_data_format_unknown;
 }
 
@@ -378,7 +378,7 @@ modbusmq_config_apply_format_version(modbusmq_config_t *config, const char *file
 
     if (changed > 0)
     {
-        modbusmq_logf(LOG_ERROR,
+        modbusmq_logf(MODBUSMQ_LOG_ERROR,
                       "%s: config.version is %s, so %d channel(s) using int_a/int_ab/int_ba keep the old "
                       "UNSIGNED meaning. A negative reading will publish as a large positive number. "
                       "To fix: set config.version = 2.0 and spell the genuinely unsigned ones uint_ab/uint_ba.\n",
@@ -593,7 +593,7 @@ modbusmq_config_set_overrides(char *const *overrides, int noverrides)
         config_override_hit = calloc(config_noverrides, sizeof(uint8_t));
         if (!config_override_hit)
         {
-            modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
             config_noverrides = 0;
         }
     }
@@ -661,7 +661,7 @@ modbusmq_config_override_unmatched(void)
         {
             continue;
         }
-        modbusmq_logf(LOG_ERROR, "WARNING: -e %s: key never appears in the config file, override not applied\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "WARNING: -e %s: key never appears in the config file, override not applied\n",
                 config_overrides[o] ? config_overrides[o] : "");
         unmatched++;
     }
@@ -709,7 +709,7 @@ config_validate_write_block(int w, modbusmq_write_t *write)
 
         if (channel->format == modbusmq_data_format_unknown)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d.channel.%d (%s): format is required\n", w+1, c+1, cname);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d.channel.%d (%s): format is required\n", w+1, c+1, cname);
             return -1;
         }
         //
@@ -718,12 +718,12 @@ config_validate_write_block(int w, modbusmq_write_t *write)
         //
         if (modbusmq_format_is_text(channel->format))
         {
-            modbusmq_logf(LOG_ERROR, "write.%d.channel.%d (%s): text formats can be read but not written\n", w+1, c+1, cname);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d.channel.%d (%s): text formats can be read but not written\n", w+1, c+1, cname);
             return -1;
         }
         if (channel->length != 2 && channel->length != 4)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d.channel.%d (%s): a register write is 2 or 4 bytes, %s is %d\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d.channel.%d (%s): a register write is 2 or 4 bytes, %s is %d\n",
                     w+1, c+1, cname, modbusmq_config_dataformat_name(channel->format), channel->length);
             return -1;
         }
@@ -733,7 +733,7 @@ config_validate_write_block(int w, modbusmq_write_t *write)
         //
         if (channel->offset < 0 || (channel->offset % 2) != 0)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d.channel.%d (%s): offset %d is not on a register boundary -- offset counts bytes, so it is even\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d.channel.%d (%s): offset %d is not on a register boundary -- offset counts bytes, so it is even\n",
                     w+1, c+1, cname, channel->offset);
             return -1;
         }
@@ -761,7 +761,7 @@ config_validate_write_block(int w, modbusmq_write_t *write)
 
     if (nregs <= 0 || nregs > 123)
     {
-        modbusmq_logf(LOG_ERROR, "write.%d (%s): a block is 1..123 registers, this one works out to %d\n", w+1, name, nregs);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): a block is 1..123 registers, this one works out to %d\n", w+1, name, nregs);
         return -1;
     }
 
@@ -786,7 +786,7 @@ config_validate_write_block(int w, modbusmq_write_t *write)
 
         if (last > nregs)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d.channel.%d (%s): offset %d is %d register(s) into a block that is only %d long\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d.channel.%d (%s): offset %d is %d register(s) into a block that is only %d long\n",
                     w+1, c+1, cname, channel->offset, last, nregs);
             return -1;
         }
@@ -795,7 +795,7 @@ config_validate_write_block(int w, modbusmq_write_t *write)
         {
             if (claimed[r]++)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d.channel.%d (%s): register offset %d (address 0x%04X) is already claimed by another channel\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d.channel.%d (%s): register offset %d (address 0x%04X) is already claimed by another channel\n",
                         w+1, c+1, cname, r, write->address + r);
                 return -1;
             }
@@ -806,7 +806,7 @@ config_validate_write_block(int w, modbusmq_write_t *write)
     {
         if (!claimed[r])
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): register offset %d (address 0x%04X) belongs to no channel. A block write sends every "
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): register offset %d (address 0x%04X) belongs to no channel. A block write sends every "
                             "register it covers, so this one would go out as a zero nobody asked for -- give it a channel, "
                             "or shorten the block\n",
                     w+1, name, r, write->address + r);
@@ -872,7 +872,7 @@ config_module_key(modbusmq_config_t *config, const char *key, const char *value,
         config->module_count = (int)strtol(value, NULL, 0);
         if (config->module_count < 0 || config->module_count > CONFIG_SLAVE_MAX)
         {
-            modbusmq_logf(LOG_ERROR, "%d: %s=%s: must be between 0 and %d\n", line_num, key, value, CONFIG_SLAVE_MAX);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: must be between 0 and %d\n", line_num, key, value, CONFIG_SLAVE_MAX);
             return -1;
         }
         return 0;
@@ -882,7 +882,7 @@ config_module_key(modbusmq_config_t *config, const char *key, const char *value,
         config->module_slave_first = (int)strtol(value, NULL, 0);
         if (config->module_slave_first < 1 || config->module_slave_first > CONFIG_SLAVE_MAX)
         {
-            modbusmq_logf(LOG_ERROR, "%d: %s=%s: must be between 1 and %d\n", line_num, key, value, CONFIG_SLAVE_MAX);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: must be between 1 and %d\n", line_num, key, value, CONFIG_SLAVE_MAX);
             return -1;
         }
         return 0;
@@ -903,7 +903,7 @@ config_check_modules(modbusmq_config_t *config)
 
     if (config->module_count > 0 && last > CONFIG_SLAVE_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "module.count = %d from module.slave_first = %d ends on slave %d, past %d\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "module.count = %d from module.slave_first = %d ends on slave %d, past %d\n",
                 config->module_count, config->module_slave_first, last, CONFIG_SLAVE_MAX);
         return -1;
     }
@@ -981,7 +981,7 @@ config_strdup(const char *s)
         *copy = strdup(s);
     if (!copy)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
         exit(2);
     }
     return copy;
@@ -1042,7 +1042,7 @@ config_copy_input(modbusmq_input_t *dst, const modbusmq_input_t *src, int module
     dst->channels = malloc(src->channel_max * sizeof(modbusmq_channel_t));
     if (!dst->channels)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
         exit(2);
     }
     memcpy(dst->channels, src->channels, src->channel_max * sizeof(modbusmq_channel_t));
@@ -1078,7 +1078,7 @@ config_copy_write(modbusmq_write_t *dst, const modbusmq_write_t *src, int module
     dst->channels = malloc(src->channel_max * sizeof(modbusmq_write_channel_t));
     if (!dst->channels)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
         exit(2);
     }
     memcpy(dst->channels, src->channels, src->channel_max * sizeof(modbusmq_write_channel_t));
@@ -1109,7 +1109,7 @@ config_expand_inputs(modbusmq_config_t *config)
         }
         if (config->module_count <= 0)
         {
-            modbusmq_logf(LOG_ERROR, "input.%d: slave = module needs module.count > 0, and module.count is %d\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "input.%d: slave = module needs module.count > 0, and module.count is %d\n",
                     i+1, config->module_count);
             return -1;
         }
@@ -1126,7 +1126,7 @@ config_expand_inputs(modbusmq_config_t *config)
 
     if (total > MODBUSMQ_INPUT_WRITE_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "%d template input(s) x module.count %d come to %d inputs, more than %d\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d template input(s) x module.count %d come to %d inputs, more than %d\n",
                 ntemplate, config->module_count, total, MODBUSMQ_INPUT_WRITE_MAX);
         return -1;
     }
@@ -1135,7 +1135,7 @@ config_expand_inputs(modbusmq_config_t *config)
         *inputs = calloc(total, sizeof(modbusmq_input_t));
     if (!inputs)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
         exit(2);
     }
 
@@ -1195,7 +1195,7 @@ config_expand_writes(modbusmq_config_t *config)
         }
         if (config->module_count <= 0)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d: slave = module needs module.count > 0, and module.count is %d\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d: slave = module needs module.count > 0, and module.count is %d\n",
                     w+1, config->module_count);
             return -1;
         }
@@ -1212,7 +1212,7 @@ config_expand_writes(modbusmq_config_t *config)
 
     if (total > MODBUSMQ_INPUT_WRITE_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "%d template write(s) x module.count %d come to %d writes, more than %d\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d template write(s) x module.count %d come to %d writes, more than %d\n",
                 ntemplate, config->module_count, total, MODBUSMQ_INPUT_WRITE_MAX);
         return -1;
     }
@@ -1221,7 +1221,7 @@ config_expand_writes(modbusmq_config_t *config)
         *writes = calloc(total, sizeof(modbusmq_write_t));
     if (!writes)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
         exit(2);
     }
 
@@ -1294,7 +1294,7 @@ config_topic_module(char **topic, int module, const char *label)
 
     if (!out)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
         exit(2);
     }
 
@@ -1309,7 +1309,7 @@ config_topic_module(char **topic, int module, const char *label)
         {
             if (module < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%s: topic %s uses %%i, which only a slave = module entry may (%%%% for a literal %%)\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: topic %s uses %%i, which only a slave = module entry may (%%%% for a literal %%)\n",
                         label, *topic);
                 free(out);
                 return -1;
@@ -1371,7 +1371,7 @@ config_apply_module_topics(modbusmq_config_t *config)
             }
             if (input->module >= 0 && rc == 0)
             {
-                modbusmq_logf(LOG_ERROR, "%s: topic %s has no %%i, so every module would publish to it\n", label, channel->topic);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: topic %s has no %%i, so every module would publish to it\n", label, channel->topic);
                 return -1;
             }
         }
@@ -1394,7 +1394,7 @@ config_apply_module_topics(modbusmq_config_t *config)
         }
         if (write->module >= 0 && rc == 0)
         {
-            modbusmq_logf(LOG_ERROR, "%s: topic %s has no %%i, so one message would write every module\n", label, write->topic);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: topic %s has no %%i, so one message would write every module\n", label, write->topic);
             return -1;
         }
 
@@ -1410,7 +1410,7 @@ config_apply_module_topics(modbusmq_config_t *config)
         }
         if (write->module >= 0 && rc == 0)
         {
-            modbusmq_logf(LOG_ERROR, "%s: ack_topic %s has no %%i, so every module would ack on it\n", label, write->ack_topic);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: ack_topic %s has no %%i, so every module would ack on it\n", label, write->ack_topic);
             return -1;
         }
     }
@@ -1425,7 +1425,7 @@ modbusmq_config_parse(const char *filename)
         *fp = fopen(filename, "r");
     if (!fp)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to open config-file: %s\n", filename);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to open config-file: %s\n", filename);
         return -1;
     }
 
@@ -1447,7 +1447,7 @@ modbusmq_config_parse(const char *filename)
         modbusmq_config = malloc(sizeof(modbusmq_config_t));
         if (!modbusmq_config)
         {
-            modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
             fclose(fp);
             free(line);
             return -1;
@@ -1510,7 +1510,7 @@ modbusmq_config_parse(const char *filename)
         {
             if (modbusmq_get_debug() > 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s = %s (overridden by -e, file said %s)\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s = %s (overridden by -e, file said %s)\n",
                         line_num, key, override, value);
             }
             value = (char *)override;
@@ -1561,7 +1561,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->query_mode = modbusmq_config_query_mode(value);
             if (modbusmq_config->query_mode < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: invalid query_mode: %s, setting query_type=parallell\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: invalid query_mode: %s, setting query_type=parallell\n", line_num, key);
                 modbusmq_config->query_mode = modbusmq_query_mode_parallell;
             }
             if (modbusmq_config->query_mode < modbusmq_query_mode_min || modbusmq_config->query_mode >= modbusmq_query_mode_max)
@@ -1574,7 +1574,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->round_interval_ms = (int)strtol(value, NULL, 0);
             if (modbusmq_config->round_interval_ms < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: round_interval must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: round_interval must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -1592,7 +1592,7 @@ modbusmq_config_parse(const char *filename)
             }
             if (rc > 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s: Unknown config\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown config\n", line_num, key);
             }
             else if (key[7] == 'c')
             {
@@ -1607,7 +1607,7 @@ modbusmq_config_parse(const char *filename)
         {
             if (modbusmq_config->inputs)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
                                 "so a second one would discard everything already parsed into the first.\n", line_num, key);
                 fclose(fp);
                 free(line);
@@ -1617,7 +1617,7 @@ modbusmq_config_parse(const char *filename)
                 nvalue = (int)strtoul(value, NULL, 0);
             if (nvalue < 0 || nvalue > MODBUSMQ_INPUT_WRITE_MAX)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s must be between [0..%d]\n", line_num, key, MODBUSMQ_INPUT_WRITE_MAX);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s must be between [0..%d]\n", line_num, key, MODBUSMQ_INPUT_WRITE_MAX);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -1628,7 +1628,7 @@ modbusmq_config_parse(const char *filename)
                 modbusmq_config->inputs      = malloc(nvalue * sizeof(modbusmq_input_t));
                 if (!modbusmq_config->inputs)
                 {
-                    modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
                     exit(2);
                 }
                 memset(modbusmq_config->inputs, 0, nvalue * sizeof(modbusmq_input_t));
@@ -1651,7 +1651,7 @@ modbusmq_config_parse(const char *filename)
                 n = sscanf(key, "input.%d.%99s", &input_num, input_key);
             if (n != 2)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
                 continue;
             }
 
@@ -1659,7 +1659,7 @@ modbusmq_config_parse(const char *filename)
             {
                 if (modbusmq_get_debug() > 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s, input=%d must be between 1..%d\n", line_num, key, input_num, modbusmq_config->input_max);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s, input=%d must be between 1..%d\n", line_num, key, input_num, modbusmq_config->input_max);
                 }
                 continue;
             }
@@ -1689,7 +1689,7 @@ modbusmq_config_parse(const char *filename)
                 input->type = modbusmq_config_input_type(value);
                 if (input->type == 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: Unknown input_type\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: Unknown input_type\n", line_num, key, value);
                 }
             }
             else if (strcmp(input_key, "address") == 0)
@@ -1713,7 +1713,7 @@ modbusmq_config_parse(const char *filename)
                 input->tier = modbusmq_config_tier(value);
                 if (input->tier < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected fast or deep\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected fast or deep\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1731,7 +1731,7 @@ modbusmq_config_parse(const char *filename)
                     on_change = config_boolean(value);
                 if (on_change < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1744,7 +1744,7 @@ modbusmq_config_parse(const char *filename)
                 input->min_change_rel = strtod(value, NULL);
                 if (input->min_change_rel < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1756,7 +1756,7 @@ modbusmq_config_parse(const char *filename)
                 input->min_change = strtod(value, NULL);
                 if (input->min_change < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1768,7 +1768,7 @@ modbusmq_config_parse(const char *filename)
                 input->min_interval = (int)strtol(value, NULL, 0);
                 if (input->min_interval < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1780,7 +1780,7 @@ modbusmq_config_parse(const char *filename)
                 input->max_interval = (int)strtol(value, NULL, 0);
                 if (input->max_interval < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1791,7 +1791,7 @@ modbusmq_config_parse(const char *filename)
             {
                 if (input->channels)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
                                 "so a second one would discard everything already parsed into the first.\n", line_num, key);
                     fclose(fp);
                     free(line);
@@ -1801,7 +1801,7 @@ modbusmq_config_parse(const char *filename)
                     nvalue = (int)strtoul(value, NULL, 0);
                 if (nvalue <= 0 || nvalue > 100)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s must be between [1..100]\n", line_num, key);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s must be between [1..100]\n", line_num, key);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -1810,7 +1810,7 @@ modbusmq_config_parse(const char *filename)
                 input->channels      = malloc(nvalue * sizeof(modbusmq_channel_t));
                 if (!input->channels)
                 {
-                    modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
                     exit(2);
                 }
                 memset(input->channels, 0, nvalue * sizeof(modbusmq_channel_t));
@@ -1827,7 +1827,7 @@ modbusmq_config_parse(const char *filename)
                     n = sscanf(input_key, "channel.%d.%99s", &channel_num, channel_key);
                 if (n != 2)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
                     continue;
                 }
 
@@ -1835,7 +1835,7 @@ modbusmq_config_parse(const char *filename)
                 {
                     if (modbusmq_get_debug() > 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s, channel.{%d} must be between 1..%d\n", line_num, key, channel_num, input->channel_max);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s, channel.{%d} must be between 1..%d\n", line_num, key, channel_num, input->channel_max);
                     }
                     continue;
                 }
@@ -1853,7 +1853,7 @@ modbusmq_config_parse(const char *filename)
                     channel->format = modbusmq_config_dataformat(value);
                     if (channel->format == modbusmq_data_format_unknown)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: unknown format\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: unknown format\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -1880,7 +1880,7 @@ modbusmq_config_parse(const char *filename)
 
                     if (n <= 0 || bytes > MODBUSMQ_TEXT_BYTES_MAX)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: %s must be between 1 and %d bytes\n",
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: %s must be between 1 and %d bytes\n",
                                 line_num, key, value, channel_key, MODBUSMQ_TEXT_BYTES_MAX);
                         fclose(fp);
                         free(line);
@@ -1906,7 +1906,7 @@ modbusmq_config_parse(const char *filename)
                     }
                     else
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: timezone must be utc or local\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: timezone must be utc or local\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -1944,7 +1944,7 @@ modbusmq_config_parse(const char *filename)
                     channel->retain = config_boolean(value);
                     if (channel->retain < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -1956,7 +1956,7 @@ modbusmq_config_parse(const char *filename)
                     channel->qos = (int)strtol(value, NULL, 0);
                     if (channel->qos < 0 || channel->qos > 2)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -1968,7 +1968,7 @@ modbusmq_config_parse(const char *filename)
                     channel->decimals = (int)strtol(value, NULL, 0);
                     if (channel->decimals < 0 || channel->decimals > 9)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: decimals must be between 0 and 9\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: decimals must be between 0 and 9\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -1981,7 +1981,7 @@ modbusmq_config_parse(const char *filename)
                         on_change = config_boolean(value);
                     if (on_change < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -1994,7 +1994,7 @@ modbusmq_config_parse(const char *filename)
                     channel->min_change = strtod(value, NULL);
                     if (channel->min_change < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -2006,7 +2006,7 @@ modbusmq_config_parse(const char *filename)
                     channel->min_change_rel = strtod(value, NULL);
                     if (channel->min_change_rel < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -2018,7 +2018,7 @@ modbusmq_config_parse(const char *filename)
                     channel->min_interval = (int)strtol(value, NULL, 0);
                     if (channel->min_interval < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -2030,7 +2030,7 @@ modbusmq_config_parse(const char *filename)
                     channel->max_interval = (int)strtol(value, NULL, 0);
                     if (channel->max_interval < 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -2040,7 +2040,7 @@ modbusmq_config_parse(const char *filename)
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
                 continue;
             }
             
@@ -2052,7 +2052,7 @@ modbusmq_config_parse(const char *filename)
         {
             if (modbusmq_config->writes)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
                                 "so a second one would discard everything already parsed into the first.\n", line_num, key);
                 fclose(fp);
                 free(line);
@@ -2062,7 +2062,7 @@ modbusmq_config_parse(const char *filename)
                 nvalue = (int)strtoul(value, NULL, 0);
             if (nvalue < 0 || nvalue > MODBUSMQ_INPUT_WRITE_MAX)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s must be between [0..%d]\n", line_num, key, MODBUSMQ_INPUT_WRITE_MAX);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s must be between [0..%d]\n", line_num, key, MODBUSMQ_INPUT_WRITE_MAX);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2073,7 +2073,7 @@ modbusmq_config_parse(const char *filename)
                 modbusmq_config->writes    = malloc(nvalue * sizeof(modbusmq_write_t));
                 if (!modbusmq_config->writes)
                 {
-                    modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2097,13 +2097,13 @@ modbusmq_config_parse(const char *filename)
                 n = sscanf(key, "write.%d.%99s", &write_num, write_key);
             if (n != 2)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
                 continue;
             }
 
             if (write_num <= 0 || write_num > modbusmq_config->write_max)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s, write=%d must be between 1..%d (is write.max set, and set first?)\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s, write=%d must be between 1..%d (is write.max set, and set first?)\n",
                         line_num, key, write_num, modbusmq_config->write_max);
                 fclose(fp);
                 free(line);
@@ -2137,7 +2137,7 @@ modbusmq_config_parse(const char *filename)
                 write->type = modbusmq_config_input_type(value);
                 if (write->type == 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected %s or %s\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected %s or %s\n",
                             line_num, key, value, MODBUSMQ_TYPE_COIL, MODBUSMQ_TYPE_HOLDING_REGISTER);
                     fclose(fp);
                     free(line);
@@ -2149,7 +2149,7 @@ modbusmq_config_parse(const char *filename)
                 //
                 if (write->type != modbusmq_type_coil && write->type != modbusmq_type_holding_register)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: not writable, expected %s or %s\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: not writable, expected %s or %s\n",
                             line_num, key, value, MODBUSMQ_TYPE_COIL, MODBUSMQ_TYPE_HOLDING_REGISTER);
                     fclose(fp);
                     free(line);
@@ -2161,7 +2161,7 @@ modbusmq_config_parse(const char *filename)
                 write->function = modbusmq_config_write_function(value);
                 if (write->function == modbusmq_write_function_unknown)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected %s, %s or %s\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected %s, %s or %s\n",
                             line_num, key, value,
                             MODBUSMQ_FUNCTION_WRITE_COIL, MODBUSMQ_FUNCTION_WRITE_REGISTER,
                             MODBUSMQ_FUNCTION_WRITE_REGISTERS);
@@ -2180,7 +2180,7 @@ modbusmq_config_parse(const char *filename)
                 write->format = modbusmq_config_dataformat(value);
                 if (write->format == modbusmq_data_format_unknown)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: unknown format\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: unknown format\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2194,7 +2194,7 @@ modbusmq_config_parse(const char *filename)
                 //
                 if (modbusmq_format_is_text(write->format))
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: text formats can be read but not written\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: text formats can be read but not written\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2236,7 +2236,7 @@ modbusmq_config_parse(const char *filename)
                 write->ack = config_boolean(value);
                 if (write->ack < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2252,7 +2252,7 @@ modbusmq_config_parse(const char *filename)
             {
                 if (write->channels)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s listed more than once. The array is allocated when this key is read, "
                                 "so a second one would discard everything already parsed into the first.\n", line_num, key);
                     fclose(fp);
                     free(line);
@@ -2267,7 +2267,7 @@ modbusmq_config_parse(const char *filename)
                 //
                 if (nvalue <= 0 || nvalue > 123)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s must be between [1..123]\n", line_num, key);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s must be between [1..123]\n", line_num, key);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2276,7 +2276,7 @@ modbusmq_config_parse(const char *filename)
                 write->channels    = malloc(nvalue * sizeof(modbusmq_write_channel_t));
                 if (!write->channels)
                 {
-                    modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2295,7 +2295,7 @@ modbusmq_config_parse(const char *filename)
                     nscan = sscanf(write_key, "channel.%d.%99s", &channel_num, channel_key);
                 if (nscan != 2)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unable to scan key\n", line_num, key);
                     continue;
                 }
 
@@ -2306,7 +2306,7 @@ modbusmq_config_parse(const char *filename)
                 //
                 if (channel_num <= 0 || channel_num > write->channel_max)
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s, channel.{%d} must be between 1..%d (is write.%d.channel.max set, and set first?)\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s, channel.{%d} must be between 1..%d (is write.%d.channel.max set, and set first?)\n",
                             line_num, key, channel_num, write->channel_max, write_num);
                     fclose(fp);
                     free(line);
@@ -2329,7 +2329,7 @@ modbusmq_config_parse(const char *filename)
                     channel->format = modbusmq_config_dataformat(value);
                     if (channel->format == modbusmq_data_format_unknown)
                     {
-                        modbusmq_logf(LOG_ERROR, "%d: %s=%s: unknown format\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: unknown format\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -2355,13 +2355,13 @@ modbusmq_config_parse(const char *filename)
                 }
                 else
                 {
-                    modbusmq_logf(LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
                     continue;
                 }
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
                 continue;
             }
         }
@@ -2378,7 +2378,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->mqtt_retain = config_boolean(value);
             if (modbusmq_config->mqtt_retain < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2389,7 +2389,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->mqtt_qos = (int)strtol(value, NULL, 0);
             if (modbusmq_config->mqtt_qos < 0 || modbusmq_config->mqtt_qos > 2)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2408,7 +2408,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->mqtt_ack = config_boolean(value);
             if (modbusmq_config->mqtt_ack < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2426,7 +2426,7 @@ modbusmq_config_parse(const char *filename)
                 on_change = config_boolean(value);
             if (on_change < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2439,7 +2439,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->publish_min_change = strtod(value, NULL);
             if (modbusmq_config->publish_min_change < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_change must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2451,7 +2451,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->publish_min_change_rel = strtod(value, NULL);
             if (modbusmq_config->publish_min_change_rel < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_change_rel must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2463,7 +2463,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->publish_min_interval = (int)strtol(value, NULL, 0);
             if (modbusmq_config->publish_min_interval < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2475,7 +2475,7 @@ modbusmq_config_parse(const char *filename)
             modbusmq_config->publish_max_interval = (int)strtol(value, NULL, 0);
             if (modbusmq_config->publish_max_interval < 0)
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2486,7 +2486,7 @@ modbusmq_config_parse(const char *filename)
         {
             if (strlen(key))
             {
-                modbusmq_logf(LOG_ERROR, "%d: %s: Unknown config\n", line_num, key);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown config\n", line_num, key);
             }
         }
     }
@@ -2557,7 +2557,7 @@ modbusmq_config_parse(const char *filename)
             //
             if (modbusmq_config->inputs[i].interval > 0 && modbusmq_config->inputs[i].module <= 0)
             {
-                modbusmq_logf(LOG_ERROR, "WARNING: input.%d.interval is ignored in query_mode rounds\n", i+1);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "WARNING: input.%d.interval is ignored in query_mode rounds\n", i+1);
             }
         }
     }
@@ -2590,7 +2590,7 @@ modbusmq_config_parse(const char *filename)
             {
                 if (channel->format != modbusmq_data_format_unknown)
                 {
-                    modbusmq_logf(LOG_ERROR, "%s: format does not apply to a %s input, offset is a coil index\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: format does not apply to a %s input, offset is a coil index\n",
                             label,
                             input->type == modbusmq_type_coil ? MODBUSMQ_TYPE_COIL : MODBUSMQ_TYPE_DISCRETE_INPUT);
                     return -1;
@@ -2600,7 +2600,7 @@ modbusmq_config_parse(const char *filename)
 
             if (channel->format == modbusmq_data_format_unknown)
             {
-                modbusmq_logf(LOG_ERROR, "%s: format is required\n", label);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: format is required\n", label);
                 return -1;
             }
 
@@ -2616,13 +2616,13 @@ modbusmq_config_parse(const char *filename)
                 //
                 if (channel->has_length)
                 {
-                    modbusmq_logf(LOG_ERROR, "%s: length/nregisters applies to a text format only, %s is %d bytes\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: length/nregisters applies to a text format only, %s is %d bytes\n",
                             label, modbusmq_config_dataformat_name(channel->format), fixed);
                     return -1;
                 }
                 if (channel->timefmt || channel->localtime)
                 {
-                    modbusmq_logf(LOG_ERROR, "%s: timefmt/timezone applies to a time format only\n", label);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: timefmt/timezone applies to a time format only\n", label);
                     return -1;
                 }
                 continue;
@@ -2638,21 +2638,21 @@ modbusmq_config_parse(const char *filename)
             {
                 if (!channel->has_length)
                 {
-                    modbusmq_logf(LOG_ERROR, "%s: %s needs length (bytes) or nregisters\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: %s needs length (bytes) or nregisters\n",
                             label, modbusmq_config_dataformat_name(channel->format));
                     return -1;
                 }
             }
             else if (channel->has_length && channel->length != fixed)
             {
-                modbusmq_logf(LOG_ERROR, "%s: %s is %d bytes, not %d\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: %s is %d bytes, not %d\n",
                         label, modbusmq_config_dataformat_name(channel->format), fixed, channel->length);
                 return -1;
             }
 
             if (channel->format == modbusmq_data_format_version_regs && (channel->length % 2) != 0)
             {
-                modbusmq_logf(LOG_ERROR, "%s: %s reads whole registers, so length must be even (or use nregisters)\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: %s reads whole registers, so length must be even (or use nregisters)\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
@@ -2664,19 +2664,19 @@ modbusmq_config_parse(const char *filename)
             //
             if (channel->mod != 0 || channel->mul != 0)
             {
-                modbusmq_logf(LOG_ERROR, "%s: mod/mul does not apply to %s, there is no number to scale\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: mod/mul does not apply to %s, there is no number to scale\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
             if (channel->add != 0 && !modbusmq_format_is_epoch(channel->format))
             {
-                modbusmq_logf(LOG_ERROR, "%s: add applies to an epoch format only (as the epoch shift), not %s\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: add applies to an epoch format only (as the epoch shift), not %s\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
             if (channel->has_decimals)
             {
-                modbusmq_logf(LOG_ERROR, "%s: decimals does not apply to %s\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: decimals does not apply to %s\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
@@ -2689,14 +2689,14 @@ modbusmq_config_parse(const char *filename)
             //
             if (channel->has_min_change || channel->has_min_change_rel)
             {
-                modbusmq_logf(LOG_ERROR, "%s: min_change/min_change_rel needs a magnitude, which %s has none of -- use on_change\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: min_change/min_change_rel needs a magnitude, which %s has none of -- use on_change\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
 
             if ((channel->timefmt || channel->localtime) && !modbusmq_format_is_time(channel->format))
             {
-                modbusmq_logf(LOG_ERROR, "%s: timefmt/timezone applies to a time format only, not %s\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: timefmt/timezone applies to a time format only, not %s\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
@@ -2708,7 +2708,7 @@ modbusmq_config_parse(const char *filename)
             //
             if (channel->localtime && !modbusmq_format_is_epoch(channel->format))
             {
-                modbusmq_logf(LOG_ERROR, "%s: timezone applies to an epoch format only -- %s carries no timezone to convert from\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: timezone applies to an epoch format only -- %s carries no timezone to convert from\n",
                         label, modbusmq_config_dataformat_name(channel->format));
                 return -1;
             }
@@ -2732,12 +2732,12 @@ modbusmq_config_parse(const char *filename)
 
         if (!write->topic || !write->topic[0])
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): a topic to subscribe to is required\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): a topic to subscribe to is required\n", w+1, name);
             return -1;
         }
         if (!write->has_address)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): address is required\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): address is required\n", w+1, name);
             return -1;
         }
         //
@@ -2746,12 +2746,12 @@ modbusmq_config_parse(const char *filename)
         //
         if (!write->has_slave)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): slave is required\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): slave is required\n", w+1, name);
             return -1;
         }
         if (write->has_on_value != write->has_off_value)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): set both on_value and off_value, or neither\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): set both on_value and off_value, or neither\n", w+1, name);
             return -1;
         }
 
@@ -2769,26 +2769,26 @@ modbusmq_config_parse(const char *filename)
         {
             if (write->format || write->add || write->mod || write->mul)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d (%s): format/add/mod/mul belong on write.%d.channel.M.* in a block write, not on the entry\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): format/add/mod/mul belong on write.%d.channel.M.* in a block write, not on the entry\n",
                         w+1, name, w+1);
                 return -1;
             }
             if (write->has_on_value)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d (%s): on_value/off_value map a single on/off command and do not apply to a block write\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): on_value/off_value map a single on/off command and do not apply to a block write\n",
                         w+1, name);
                 return -1;
             }
             if (write->type     == modbusmq_type_coil ||
                 write->function == modbusmq_write_function_coil)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d (%s): a block write is registers; coils are written one at a time\n", w+1, name);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): a block write is registers; coils are written one at a time\n", w+1, name);
                 return -1;
             }
             if (write->function != modbusmq_write_function_unknown &&
                 write->function != modbusmq_write_function_registers)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d (%s): a block write needs function %s\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): a block write needs function %s\n",
                         w+1, name, MODBUSMQ_FUNCTION_WRITE_REGISTERS);
                 return -1;
             }
@@ -2809,7 +2809,7 @@ modbusmq_config_parse(const char *filename)
         //
         if (write->has_naddress)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): naddress describes a block, so it needs write.%d.channel.max and the channels to go with it\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): naddress describes a block, so it needs write.%d.channel.max and the channels to go with it\n",
                     w+1, name, w+1);
             return -1;
         }
@@ -2821,7 +2821,7 @@ modbusmq_config_parse(const char *filename)
         //
         if (write->type == 0 && write->function == modbusmq_write_function_unknown)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): either type or function is required\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): either type or function is required\n", w+1, name);
             return -1;
         }
 
@@ -2851,7 +2851,7 @@ modbusmq_config_parse(const char *filename)
 
             if (coil_type != coil_func)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d (%s): type and function disagree\n", w+1, name);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): type and function disagree\n", w+1, name);
                 return -1;
             }
         }
@@ -2864,7 +2864,7 @@ modbusmq_config_parse(const char *filename)
             //
             if (write->add || write->mod || write->mul || write->format)
             {
-                modbusmq_logf(LOG_ERROR, "write.%d (%s): format/add/mod/mul do not apply to a coil write\n", w+1, name);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): format/add/mod/mul do not apply to a coil write\n", w+1, name);
                 return -1;
             }
             continue;
@@ -2872,7 +2872,7 @@ modbusmq_config_parse(const char *filename)
 
         if (write->format == modbusmq_data_format_unknown)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): format is required for a register write\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): format is required for a register write\n", w+1, name);
             return -1;
         }
         //
@@ -2881,12 +2881,12 @@ modbusmq_config_parse(const char *filename)
         //
         if (write->length != 2 && write->length != 4)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): format is not writable, a register write is 2 or 4 bytes\n", w+1, name);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): format is not writable, a register write is 2 or 4 bytes\n", w+1, name);
             return -1;
         }
         if (write->length == 4 && write->function == modbusmq_write_function_register)
         {
-            modbusmq_logf(LOG_ERROR, "write.%d (%s): a 4-byte format needs %s, function 06 writes one register\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write.%d (%s): a 4-byte format needs %s, function 06 writes one register\n",
                     w+1, name, MODBUSMQ_FUNCTION_WRITE_REGISTERS);
             return -1;
         }
@@ -2938,7 +2938,7 @@ modbusmq_config_parse(const char *filename)
             char *topic = malloc(nprefix + ntopic + 1);
             if (!topic)
             {
-                modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
                 return -1;
             }
             strcpy(topic, modbusmq_config->mqtt_topic_prefix);
@@ -2957,7 +2957,7 @@ modbusmq_config_parse(const char *filename)
             char *ack_topic = malloc(nprefix + nack + 1);
             if (!ack_topic)
             {
-                modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
                 return -1;
             }
             strcpy(ack_topic, modbusmq_config->mqtt_topic_prefix);
@@ -3005,7 +3005,7 @@ modbusmq_config_parse(const char *filename)
         write->ack_topic = malloc(strlen(write->topic) + strlen(suffix) + 1);
         if (!write->ack_topic)
         {
-            modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
             return -1;
         }
         strcpy(write->ack_topic, write->topic);
@@ -3104,7 +3104,7 @@ modbusmq_config_get()
         modbusmq_config = malloc(sizeof(modbusmq_config_t));
         if (!modbusmq_config)
         {
-            modbusmq_logf(LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate: %s\n", strerror(errno));
             return NULL;
         }
         memset(modbusmq_config, 0, sizeof(modbusmq_config_t));

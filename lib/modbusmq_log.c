@@ -12,9 +12,22 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 
-const char *
+static modbusmq_log_handler_t log_handler = NULL;
+static void                  *log_user    = NULL;
+
+
+void
+modbusmq_log_set_handler(modbusmq_log_handler_t handler, void *user)
+{
+    log_handler = handler;
+    log_user    = user;
+}
+
+
+static const char *
 modbusmq_log_level(int level)
 {
     if (level <= 1)
@@ -39,6 +52,24 @@ modbusmq_logf(int level, const char *format, ...)
         return;
     }
 
+    if (log_handler)
+    {
+        char message[1024];
+
+        va_start(ap, format);
+        vsnprintf(message, sizeof(message), format, ap);
+        va_end(ap);
+
+        size_t length = strlen(message);
+        if (length > 0 && message[length - 1] == '\n')
+        {
+            message[length - 1] = '\0';
+        }
+
+        log_handler(level, message, log_user);
+        return;
+    }
+
     millitime_t milli_now = millitime();
     time_t      time_now = milli_now/1000;
     struct tm *tm_ptr = localtime(&time_now);
@@ -54,7 +85,7 @@ modbusmq_logf(int level, const char *format, ...)
     
     // errors to stderr, as the library's direct prints did before they moved here
     FILE *out = stdout;
-    if (level == LOG_ERROR)
+    if (level == MODBUSMQ_LOG_ERROR)
     {
         out = stderr;
     }

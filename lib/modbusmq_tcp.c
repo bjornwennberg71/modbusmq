@@ -82,7 +82,7 @@ modbusmq_tcp_context(const char *pzConnectString)
     rc = modbusmq_parse_connect_string(pzConnectString, &connect);
     if (rc != 0)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to parse connect-string\n");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to parse connect-string\n");
         return NULL;
     }
 
@@ -94,7 +94,7 @@ modbusmq_tcp_context(const char *pzConnectString)
     assert(context);
     if (!context)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq context: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate modbusmq context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context, 0, sizeof(modbusmq_context_t));
@@ -156,7 +156,7 @@ modbusmq_tcp_context(const char *pzConnectString)
     assert(context->tcp);
     if (!context->tcp)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate modbusmq_tcp context: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate modbusmq_tcp context: %s\n", strerror(errno));
         exit(2);
     }
     memset(context->tcp, 0, sizeof(modbusmq_tcp_context_t));
@@ -230,7 +230,7 @@ modbusmq_tcp_flush(modbusmq_context_t *context)
 
     if (drained > 0)
     {
-        modbusmq_logf(LOG_INFO, "tcp_flush: drained %d stale bytes from socket\n", drained);
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "tcp_flush: drained %d stale bytes from socket\n", drained);
     }
 
     return drained;
@@ -325,7 +325,7 @@ modbusmq_tcp_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
     if (frame->length <= frame->xmit || frame->length > MODBUSMQ_FRAME_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "modbusmq_tcp_read: invalid frame length=%d xmit=%d\n", frame->length, frame->xmit);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq_tcp_read: invalid frame length=%d xmit=%d\n", frame->length, frame->xmit);
         errno = EINVAL;
         return -1;
     }
@@ -356,7 +356,7 @@ modbusmq_tcp_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
 
             if (declared < 8 || declared > MODBUSMQ_FRAME_MAX)
             {
-                modbusmq_logf(LOG_ERROR, "modbusmq_tcp_read: frame declares an unusable length of %d bytes\n", declared);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq_tcp_read: frame declares an unusable length of %d bytes\n", declared);
                 errno = EINVAL;
                 return -1;
             }
@@ -413,7 +413,7 @@ modbusmq_tcp_connect(modbusmq_context_t *context)
     rc = getaddrinfo(tcp->hostname, port, &addr_hints, &addr_result);
     if (rc != 0)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to resolve address: %s, err=%s\n", tcp->hostname, gai_strerror(rc));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to resolve address: %s, err=%s\n", tcp->hostname, gai_strerror(rc));
         return -1;
     }
 
@@ -434,7 +434,7 @@ modbusmq_tcp_connect(modbusmq_context_t *context)
         int flags = fcntl(sd, F_GETFL);
         if (flags < 0 || fcntl(sd, F_SETFL, flags | O_NONBLOCK | FD_CLOEXEC) < 0)
         {
-            modbusmq_logf(LOG_ERROR, "Unable to set socket flags: err=%s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to set socket flags: err=%s\n", strerror(errno));
             close(sd);
             sd = -1;
             continue;
@@ -461,16 +461,16 @@ modbusmq_tcp_connect(modbusmq_context_t *context)
                     rc = 0;
                     break; /* connected */
                 }
-                modbusmq_logf(LOG_ERROR, "Connect failed: err=%s\n", strerror(so_error));
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "Connect failed: err=%s\n", strerror(so_error));
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "Connect to %s:%s timed out after %d ms\n", tcp->hostname, port, MODBUSMQ_TCP_CONNECT_TIMEOUT_MS);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "Connect to %s:%s timed out after %d ms\n", tcp->hostname, port, MODBUSMQ_TCP_CONNECT_TIMEOUT_MS);
             }
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "Connect failed: err=%s\n", strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "Connect failed: err=%s\n", strerror(errno));
         }
 
         // this candidate address failed, try the next one instead of
@@ -484,7 +484,7 @@ modbusmq_tcp_connect(modbusmq_context_t *context)
 
     if (sd < 0)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to connect to %s:%s\n", tcp->hostname, port);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to connect to %s:%s\n", tcp->hostname, port);
         return -1;
     }
 
@@ -1002,7 +1002,7 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "%s transaction id mismatch: req[0x%02X%02X] != res[0x%02X%02X]. action: discard frame\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s transaction id mismatch: req[0x%02X%02X] != res[0x%02X%02X]. action: discard frame\n",
                           modbusmq_msg_tag(context, msg),
                           writer->buf[0], writer->buf[1], reader->buf[0], reader->buf[1]);
             return -2;
@@ -1019,7 +1019,7 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "%s protocol id is not 0: req[0x%02X%02X] res[0x%02X%02X]. action: discard frame\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s protocol id is not 0: req[0x%02X%02X] res[0x%02X%02X]. action: discard frame\n",
                           modbusmq_msg_tag(context, msg),
                           writer->buf[2], writer->buf[3], reader->buf[2], reader->buf[3]);
             return -3; // protocol != 0
@@ -1042,12 +1042,12 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
                 if (msg_length != reader->length)
                 {
                     reader->length = msg_length;
-                    //modbusmq_logf(LOG_INFO, "Setting new res_length=%d\n", msg_length);
+                    //modbusmq_logf(MODBUSMQ_LOG_INFO, "Setting new res_length=%d\n", msg_length);
                 }
             }
             else
             {
-                modbusmq_logf(LOG_ERROR, "%s response declares an unusable length of %d bytes. action: discard frame\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s response declares an unusable length of %d bytes. action: discard frame\n",
                               modbusmq_msg_tag(context, msg), msg_length);
                 return -4;
             }
@@ -1063,7 +1063,7 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
         }
         else
         {
-            modbusmq_logf(LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s slave id mismatch: req[%d] != res[%d]. action: discard frame\n",
                           modbusmq_msg_tag(context, msg), writer->buf[6], reader->buf[6]);
             return -5; // slave id not the same
         }
@@ -1093,14 +1093,14 @@ modbusmq_tcp_msg_check_header(modbusmq_context_t *context, modbusmq_msg_t *msg)
                     return 0;
                 }
 
-                modbusmq_logf(LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X. action: discard frame\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s device returned Modbus exception code %d for function 0x%02X. action: discard frame\n",
                               modbusmq_msg_tag(context, msg), reader->buf[8], writer->buf[7]);
             }
             else
             {
                 // the response function lives in buf[7], same as the request —
                 // buf[8] is already payload
-                modbusmq_logf(LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s function mismatch: req[0x%02X] != res[0x%02X]. action: discard frame\n",
                               modbusmq_msg_tag(context, msg), writer->buf[7], reader->buf[7]);
             }
             return -6; // error in frame

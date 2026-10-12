@@ -37,3 +37,13 @@ add_custom_target(check
     DEPENDS test_scaling test_read test_loop test_rounds test_modules modbusmq_prog modbusmq_query modbusmq_server
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     USES_TERMINAL)
+
+#
+# make check-install -- install into a throwaway prefix and build a consumer
+# against it with find_package and pkg-config, as a downstream project would
+#
+add_custom_target(check-install
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_install.sh ${CMAKE_BINARY_DIR}
+    DEPENDS modbusmq modbusmq_static modbusmq_prog modbusmq_query modbusmq_server
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL)

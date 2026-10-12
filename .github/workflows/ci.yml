@@ -102,45 +102,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and install
+      - name: Build
         run: |
-          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DMQTT_ENABLED=OFF \
-                -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DMQTT_ENABLED=OFF
           cmake --build build
-          cmake --install build
-          find prefix -name '*.pc' -o -name '*.cmake' | sort
 
-      - name: Consumer via find_package
-        run: |
-          mkdir -p consumer && cd consumer
-          cat > main.c <<'EOF'
-          #include "modbusmq.h"
-          #include <stdio.h>
-          int main(void)
-          {
-              printf("%s %s\n", MODBUSMQ_VERSION_STRING,
-                     modbusmq_strerror(MODBUSMQ_ERR_PROTOCOL));
-              return 0;
-          }
-          EOF
-          cat > CMakeLists.txt <<'EOF'
-          cmake_minimum_required(VERSION 3.16)
-          project(consumer C)
-          find_package(modbusmq 2.3 REQUIRED)
-          add_executable(consumer main.c)
-          target_link_libraries(consumer modbusmq::modbusmq)
-          EOF
-          cmake -B b -S . -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/prefix"
-          cmake --build b
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/prefix/lib" ./b/consumer
-
-      - name: Consumer via pkg-config
-        run: |
-          cd consumer
-          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/prefix/lib/pkgconfig"
-          pkg-config --modversion modbusmq
-          cc main.c $(pkg-config --cflags --libs modbusmq) -o pc_consumer
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/prefix/lib" ./pc_consumer
+      #
+      # Same script as make check-install: shared and static via find_package,
+      # static via pkg-config against a DESTDIR-staged sysroot.
+      #
+      - name: Install and build consumers
+        run: bash test/run_install.sh "$PWD/build"
 
   #
   # The version lives in two files that are kept in sync by hand, so check it

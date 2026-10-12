@@ -503,7 +503,7 @@ modbusmq_reset_queue(modbusmq_context_t *context)
         //
         // The error callback below still sees every one; the log gets one summary line.
         //
-        modbusmq_logf(LOG_DEBUG, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
+        modbusmq_logf(MODBUSMQ_LOG_DEBUG, "%s queued request dropped, the connection was reset before it was sent. action: discard request\n",
                       modbusmq_msg_tag(context, &elem->msg));
         modbusmq_report_error(context, &elem->msg, MODBUSMQ_ERR_TRANSPORT);
         dropped++;
@@ -514,7 +514,7 @@ modbusmq_reset_queue(modbusmq_context_t *context)
 
     if (dropped > 0)
     {
-        modbusmq_logf(LOG_ERROR, "connection lost: %d queued request%s dropped\n", dropped, dropped == 1 ? "" : "s");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "connection lost: %d queued request%s dropped\n", dropped, dropped == 1 ? "" : "s");
     }
 
     context->msg_wrapper_head = NULL;
@@ -608,7 +608,7 @@ modbusmq_frame_debug(modbusmq_context_t *context, modbusmq_frame_t *frame)
     {
         sprintf(azLine, "xmit = %d\n", frame->xmit);
     }
-    modbusmq_logf(LOG_INFO, "%s", azLine);
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "%s", azLine);
 }
 
 /**
@@ -922,7 +922,7 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
 
         if (bit < 0 || nbytes < 0 || (bit / 8) >= nbytes)
         {
-            modbusmq_logf(LOG_ERROR, "%s channel %s: coil %d is outside the %d coils received. action: skip channel\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s channel %s: coil %d is outside the %d coils received. action: skip channel\n",
                           modbusmq_msg_tag(context, msg),
                           channel->topic ? channel->topic : "?",
                           bit, nbytes * 8);
@@ -945,7 +945,7 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
 
     if (offset < 0 || nbytes < 0 || offset + size > nbytes)
     {
-        modbusmq_logf(LOG_ERROR, "%s channel %s: offset %d (+%d bytes) is outside the %d bytes received. action: skip channel\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s channel %s: offset %d (+%d bytes) is outside the %d bytes received. action: skip channel\n",
                       modbusmq_msg_tag(context, msg),
                       channel->topic ? channel->topic : "?",
                       offset, size, nbytes);
@@ -1019,7 +1019,7 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
         case modbusmq_data_format_a:           f = data[offset]; break;
         case modbusmq_data_format_int8:        f = (int8_t)data[offset]; break;
         default:
-            modbusmq_logf(LOG_ERROR, "channel %s: unhandled data format %d. action: skip channel\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "channel %s: unhandled data format %d. action: skip channel\n",
                           channel->topic ? channel->topic : "?", (int)channel->format);
             return 0;
         }
@@ -1432,7 +1432,7 @@ modbusmq_read_channel_text(modbusmq_context_t *context, modbusmq_msg_t *msg, con
     //
     if (MODBUSMQ_TYPE_IS_BIT(input->type))
     {
-        modbusmq_logf(LOG_ERROR, "%s channel %s: a text format cannot read a coil or discrete input. action: skip channel\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s channel %s: a text format cannot read a coil or discrete input. action: skip channel\n",
                       modbusmq_msg_tag(context, msg),
                       channel->topic ? channel->topic : "?");
         return -1;
@@ -1525,7 +1525,7 @@ modbusmq_read_channel_text(modbusmq_context_t *context, modbusmq_msg_t *msg, con
         break;
 
     default:
-        modbusmq_logf(LOG_ERROR, "channel %s: unhandled text format %d. action: skip channel\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "channel %s: unhandled text format %d. action: skip channel\n",
                       channel->topic ? channel->topic : "?", (int)channel->format);
         return -1;
     }
@@ -1533,7 +1533,7 @@ modbusmq_read_channel_text(modbusmq_context_t *context, modbusmq_msg_t *msg, con
     if (rc < 0)
     {
         buf[0] = 0;
-        modbusmq_logf(LOG_ERROR, "%s channel %s: the %d bytes at offset %d are not valid for its format. action: skip channel\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s channel %s: the %d bytes at offset %d are not valid for its format. action: skip channel\n",
                       modbusmq_msg_tag(context, msg),
                       channel->topic ? channel->topic : "?",
                       length, channel->offset);
@@ -2186,7 +2186,7 @@ modbusmq_encode_scaled(modbusmq_context_t *context, const char *name,
 
     if (!isfinite(value))
     {
-        modbusmq_logf(LOG_ERROR, "write %s: value is not a finite number. action: skip write\n", name);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: value is not a finite number. action: skip write\n", name);
         return -1;
     }
 
@@ -2269,7 +2269,7 @@ modbusmq_encode_scaled(modbusmq_context_t *context, const char *name,
 
         if (raw < lo || raw > hi)
         {
-            modbusmq_logf(LOG_ERROR, "write %s: value %.6g scales to raw %.6g, outside [%.0f..%.0f] for this format. action: skip write\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: value %.6g scales to raw %.6g, outside [%.0f..%.0f] for this format. action: skip write\n",
                           name, value, raw, lo, hi);
             return -1;
         }
@@ -2282,7 +2282,7 @@ modbusmq_encode_scaled(modbusmq_context_t *context, const char *name,
 
     if (nbytes != 2 && nbytes != 4)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: format %d cannot be written\n", name, (int)format);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: format %d cannot be written\n", name, (int)format);
         return -1;
     }
 
@@ -2419,14 +2419,14 @@ modbusmq_write_encode_block(modbusmq_context_t *context, const modbusmq_write_t 
 
     if (write->channel_max <= 0 || !write->channels || write->naddress <= 0)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: not a block write\n", name);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: not a block write\n", name);
         errno = EINVAL;
         return -1;
     }
 
     if (nregs < write->naddress)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: block is %d registers, caller has room for %d\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: block is %d registers, caller has room for %d\n",
                       name, write->naddress, nregs);
         errno = EINVAL;
         return -1;
@@ -2434,7 +2434,7 @@ modbusmq_write_encode_block(modbusmq_context_t *context, const modbusmq_write_t 
 
     if (nvalues >= 0 && nvalues != write->channel_max)
     {
-        modbusmq_logf(LOG_ERROR, "write %s: block takes %d values, payload carried %d. action: skip write\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: block takes %d values, payload carried %d. action: skip write\n",
                       name, write->channel_max, nvalues);
         return -1;
     }
@@ -2463,7 +2463,7 @@ modbusmq_write_encode_block(modbusmq_context_t *context, const modbusmq_write_t 
             //
             if (!channel->has_value)
             {
-                modbusmq_logf(LOG_ERROR, "write %s: channel %d has no value to fall back on, so there is nothing to trigger. action: skip write\n",
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: channel %d has no value to fall back on, so there is nothing to trigger. action: skip write\n",
                               name, c+1);
                 return -1;
             }
@@ -2494,7 +2494,7 @@ modbusmq_write_encode_block(modbusmq_context_t *context, const modbusmq_write_t 
 
         if ((channel->offset % 2) != 0 || first < 0 || first + n > write->naddress)
         {
-            modbusmq_logf(LOG_ERROR, "write %s: channel %d at offset %d does not fit a %d-register block\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "write %s: channel %d at offset %d does not fit a %d-register block\n",
                           name, c+1, channel->offset, write->naddress);
             errno = EINVAL;
             return -1;
@@ -2546,7 +2546,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     ptr = strtok(azConnectString, "://");
     if (!ptr)
     {
-        modbusmq_logf(LOG_ERROR, "Invalid connect-string, missing protocol: %s\n", input_string);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Invalid connect-string, missing protocol: %s\n", input_string);
         return -1;
     }
     if (strstr(ptr, "tcp"))
@@ -2563,7 +2563,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "Unknown protocol in connect-string: %s\n", ptr);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unknown protocol in connect-string: %s\n", ptr);
         return -2; // unknown connect type
     }
     
@@ -2627,7 +2627,7 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "Unknown protocol: %s\n", ptr);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unknown protocol: %s\n", ptr);
         return -1;
     }
     return 0;
@@ -3164,7 +3164,7 @@ modbusmq_frame_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *fr
     //
     if (nbits <= 0 || nbits > 1968)
     {
-        modbusmq_logf(LOG_ERROR, "write coils: %d coils is outside 1..1968\n", nbits);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write coils: %d coils is outside 1..1968\n", nbits);
         errno = EINVAL;
         return -1;
     }
@@ -3176,7 +3176,7 @@ modbusmq_frame_write_coil_bits(modbusmq_context_t *context, modbusmq_frame_t *fr
 
     if (frame->length + 1 + nb > MODBUSMQ_FRAME_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "write coils: %d coils does not fit a frame\n", nbits);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write coils: %d coils does not fit a frame\n", nbits);
         errno = EINVAL;
         return -1;
     }
@@ -3254,7 +3254,7 @@ modbusmq_frame_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fr
     //
     if (naddr <= 0 || naddr > 123 || !values)
     {
-        modbusmq_logf(LOG_ERROR, "write registers: %d registers is outside 1..123\n", naddr);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write registers: %d registers is outside 1..123\n", naddr);
         errno = EINVAL;
         return -1;
     }
@@ -3263,7 +3263,7 @@ modbusmq_frame_write_registers(modbusmq_context_t *context, modbusmq_frame_t *fr
 
     if (frame->length + 1 + naddr * 2 > MODBUSMQ_FRAME_MAX)
     {
-        modbusmq_logf(LOG_ERROR, "write registers: %d registers does not fit a frame\n", naddr);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "write registers: %d registers does not fit a frame\n", naddr);
         errno = EINVAL;
         return -1;
     }
@@ -3355,7 +3355,7 @@ modbusmq_post_internal(modbusmq_context_t *context, modbusmq_msg_t *msg, int fla
         *wrapper = (modbusmq_msg_wrapper_t *)malloc(sizeof(modbusmq_msg_wrapper_t));
     if (!wrapper)
     {
-        modbusmq_logf(LOG_ERROR, "Unable to allocate message wrapper\n");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to allocate message wrapper\n");
         return -1;
     }
 
@@ -3585,7 +3585,7 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
 
     if (!context->config)
     {
-        modbusmq_logf(LOG_ERROR, "modbusmq_subscribe: context->config not set — call modbusmq_set_config() first\n");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq_subscribe: context->config not set — call modbusmq_set_config() first\n");
         errno = EINVAL;
         return -1;
     }
@@ -3603,7 +3603,7 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
         *timer = (modbusmq_timer_t *)malloc(sizeof(modbusmq_timer_t));
     if (!timer)
     {
-        modbusmq_logf(LOG_ERROR, "Allocation error: %s\n", strerror(errno));
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Allocation error: %s\n", strerror(errno));
         assert(0);
         return -1;
     }
@@ -3905,7 +3905,7 @@ modbusmq_write(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "modbusmq tcp/rtu context missing\n");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq tcp/rtu context missing\n");
         assert(0);
         return -1;
     }
@@ -3946,7 +3946,7 @@ modbusmq_read(modbusmq_context_t *context, int fd, modbusmq_frame_t *frame)
     }
     else
     {
-        modbusmq_logf(LOG_ERROR, "modbusmq tcp/rtu context missing\n");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "modbusmq tcp/rtu context missing\n");
         assert(0);
         return -1;
     }
@@ -4048,7 +4048,7 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
             if (rc < 0)
             {
                 context->err++;
-                modbusmq_logf(LOG_ERROR, "Unable to write to socket: rc = %d\n", rc);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to write to socket: rc = %d\n", rc);
                 return -1;
             }
             
@@ -4092,7 +4092,7 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
             if (rc < 0)
             {
                 context->err++;
-                modbusmq_logf(LOG_ERROR, "%s:%d:%s: Unable to read from socket: rc = %d, errno=%d, str=%s\n", __FILE__, __LINE__, __FUNCTION__, rc, errno, strerror(errno));
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s:%d:%s: Unable to read from socket: rc = %d, errno=%d, str=%s\n", __FILE__, __LINE__, __FUNCTION__, rc, errno, strerror(errno));
                 return MODBUSMQ_ERR_TRANSPORT;
             }
 
@@ -4305,7 +4305,7 @@ modbusmq_resync(modbusmq_context_t *context)
 int
 modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper)
 {
-    // modbusmq_logf(LOG_INFO, "modbusmq_handle_msg\n");
+    // modbusmq_logf(MODBUSMQ_LOG_INFO, "modbusmq_handle_msg\n");
     // written request complete
     // read    response complete
     // call user function
@@ -4323,7 +4323,7 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
     //
     if (rc != 0)
     {
-        modbusmq_logf(LOG_ERROR, "%s discarding response: %s (rc=%d). action: discard frame and resync\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s discarding response: %s (rc=%d). action: discard frame and resync\n",
                       modbusmq_msg_tag(context, &wrapper->msg),
                       rc < 0 ? "failed validation" : "incomplete frame",
                       rc);
@@ -4394,7 +4394,7 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
 
         if (matched == 0)
         {
-            modbusmq_logf(LOG_ERROR, "%s response matches no input block (function %d). action: dropped\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s response matches no input block (function %d). action: dropped\n",
                           modbusmq_msg_tag(context, &wrapper->msg), function);
         }
     }
@@ -4874,7 +4874,7 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         if (request_sent && (time_now - context->last_write_ms) >= context->frame_timeout_ms)
         {
             // discard this packages
-            modbusmq_logf(LOG_ERROR, "%s no response within %llu ms. action: discard request and continue\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s no response within %llu ms. action: discard request and continue\n",
                           modbusmq_msg_tag(context, &wrapper->msg),
                           (unsigned long long)context->frame_timeout_ms);
 
@@ -4882,8 +4882,8 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
 
             if (modbusmq_debug)
             {
-                // modbusmq_logf(LOG_ERROR, "res.res_length = %d\nres.res_received = %d\n", wrapper->msg.res_length, wrapper->msg.res_xmit);
-                modbusmq_logf(LOG_ERROR, "time_diff_ms = %llu\n", (unsigned long long)(time_now - context->last_write_ms));
+                // modbusmq_logf(MODBUSMQ_LOG_ERROR, "res.res_length = %d\nres.res_received = %d\n", wrapper->msg.res_length, wrapper->msg.res_xmit);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "time_diff_ms = %llu\n", (unsigned long long)(time_now - context->last_write_ms));
             }
             
             if (modbusmq_debug)
@@ -4927,7 +4927,7 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
             // from post would discard it the moment it reached the head on
             // a slow RTU link, before it ever had a chance to go out.
             //
-            modbusmq_logf(LOG_ERROR, "%s not sent within %llu ms, the link never became writable. action: discard request and continue\n",
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s not sent within %llu ms, the link never became writable. action: discard request and continue\n",
                           modbusmq_msg_tag(context, &wrapper->msg),
                           (unsigned long long)context->frame_timeout_ms);
 
@@ -5083,7 +5083,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
             {
                 continue;
             }
-            modbusmq_logf(LOG_ERROR, "poll failed: rc = %d, errno=%d, str=%s\n", rc, errno, strerror(errno));
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "poll failed: rc = %d, errno=%d, str=%s\n", rc, errno, strerror(errno));
             result = MODBUSMQ_ERR_TRANSPORT;
             break;
         }
@@ -5111,7 +5111,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                     // in case the real answer is still coming, but remember the
                     // failure in case it never does.
                     //
-                    modbusmq_logf(LOG_ERROR, "%s frame rejected, stream resynced. action: keep waiting for the real response\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s frame rejected, stream resynced. action: keep waiting for the real response\n",
                                   modbusmq_msg_tag(context, msg));
                     modbusmq_report_error(context, msg, modbusmq_reject_reason(context, msg));
                     result = MODBUSMQ_ERR_PROTOCOL;
@@ -5125,7 +5125,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                     int
                         code = modbusmq_frame_exception_code(context, reader);
 
-                    modbusmq_logf(LOG_ERROR, "%s device refused the request: %s (%d). action: give up\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s device refused the request: %s (%d). action: give up\n",
                                   modbusmq_msg_tag(context, msg), modbusmq_exception_string(code), code);
 
                     modbusmq_report_error(context, msg, MODBUSMQ_ERR_EXCEPTION);
@@ -5134,7 +5134,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                 }
                 else if (rc < 0)
                 {
-                    modbusmq_logf(LOG_ERROR, "%s transport error rc=%d, err=%s. action: give up\n",
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s transport error rc=%d, err=%s. action: give up\n",
                                   modbusmq_msg_tag(context, msg), rc, strerror(errno));
                     modbusmq_report_error(context, msg, MODBUSMQ_ERR_TRANSPORT);
                     result = MODBUSMQ_ERR_TRANSPORT;
@@ -5150,7 +5150,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
                     result = modbusmq_check(context, msg);
                     if (result != 0)
                     {
-                        modbusmq_logf(LOG_ERROR, "%s response failed validation (rc=%d). action: discard frame and resync\n",
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s response failed validation (rc=%d). action: discard frame and resync\n",
                                       modbusmq_msg_tag(context, msg), result);
                         modbusmq_flush(context);
                         context->resync_pending = 1;
@@ -5166,7 +5166,7 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
 
     if (result > 0)
     {
-        modbusmq_logf(LOG_ERROR, "%s no complete response within %d ms. action: give up\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s no complete response within %d ms. action: give up\n",
                       modbusmq_msg_tag(context, msg), mswait);
         modbusmq_report_error(context, msg, MODBUSMQ_ERR_TIMEOUT);
     }
@@ -5210,7 +5210,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         if (revents & (POLLERR | POLLHUP))
         {
             context->err++;
-            modbusmq_logf(LOG_ERROR, "connection closed while idle (revents=0x%x)\n", revents);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "connection closed while idle (revents=0x%x)\n", revents);
             return MODBUSMQ_ERR_TRANSPORT;
         }
 
@@ -5238,7 +5238,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         int
             code = modbusmq_frame_exception_code(context, &wrapper->msg.frame[1]);
 
-        modbusmq_logf(LOG_ERROR, "%s device refused the request: %s (%d). action: discard request and continue\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s device refused the request: %s (%d). action: discard request and continue\n",
                       modbusmq_msg_tag(context, &wrapper->msg), modbusmq_exception_string(code), code);
 
         context->err++;
@@ -5262,7 +5262,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
         // message is now unanswerable: drop it so the queue moves on to the
         // next request instead of stalling until the frame timeout.
         //
-        modbusmq_logf(LOG_ERROR, "%s response rejected. action: discard request and continue\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s response rejected. action: discard request and continue\n",
                       modbusmq_msg_tag(context, &wrapper->msg));
 
         modbusmq_report_error(context, &wrapper->msg, modbusmq_reject_reason(context, &wrapper->msg));
@@ -5273,7 +5273,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
     else if (rc < 0)
     {
         context->err++;
-        modbusmq_logf(LOG_ERROR, "%s transport error rc=%d, err=%s\n",
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s transport error rc=%d, err=%s\n",
                       modbusmq_msg_tag(context, &wrapper->msg), rc, strerror(errno));
         modbusmq_report_error(context, &wrapper->msg, MODBUSMQ_ERR_TRANSPORT);
 
@@ -5289,7 +5289,7 @@ modbusmq_loop_write_read(modbusmq_context_t *context, int revents)
     }
     else if (rc > 0)
     {
-        // modbusmq_logf(LOG_INFO, "%s:%d:%s: msg.req=[%d:%d] msg.res=[%d:%d] revents=%s | %s\n", __FILE__, __LINE__, __FUNCTION__,
+        // modbusmq_logf(MODBUSMQ_LOG_INFO, "%s:%d:%s: msg.req=[%d:%d] msg.res=[%d:%d] revents=%s | %s\n", __FILE__, __LINE__, __FUNCTION__,
         //             wrapper->msg.frame[index].xmit, wrapper->msg.req_length,
         //             wrapper->msg.res_xmit, wrapper->msg.res_length,
         //             (revents & POLLIN) ? "POLLIN" : "",

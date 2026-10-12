@@ -10,8 +10,9 @@ result back.
 That is the whole design. It exists so a gateway can talk to several devices over
 several adapters, on one thread, in a program that is also doing other things.
 
-`modbusmq.h` and `modbusmq_time.h` are the only headers installed, and a
-`modbusmq_context_t *` is opaque, so the internals can move without breaking you.
+`modbusmq.h`, `modbusmq_time.h`, `modbusmq_config.h` and `modbusmq_log.h` are
+the headers installed, and a `modbusmq_context_t *` is opaque, so the internals
+can move without breaking you.
 
 TCP and RTU go through the same state machine. Framing, CRC and header parsing
 live behind a vtable chosen when you create the context, so with the exception of
@@ -30,11 +31,22 @@ bash setup.sh
 ```
 
 That leaves `libmodbusmq.so.<version>` with the usual `libmodbusmq.so` and
-`libmodbusmq.so.<major>` symlinks, plus `modbusmq.h` and `modbusmq_time.h` in the
-install tree's `include/`.
+`libmodbusmq.so.<major>` symlinks, the static `libmodbusmq.a`, and the public
+headers in `include/modbusmq/`. The include path points into that directory, so
+you write `#include "modbusmq.h"`, not `<modbusmq/modbusmq.h>`.
+
+From CMake:
+
+```cmake
+find_package(modbusmq CONFIG REQUIRED)
+target_link_libraries(myprog modbusmq::modbusmq)          # shared
+target_link_libraries(myprog modbusmq::modbusmq_static)   # or static
+```
+
+Or with pkg-config:
 
 ```bash
-cc myprog.c -lmodbusmq -o myprog
+cc myprog.c $(pkg-config --cflags --libs modbusmq) -o myprog
 ```
 
 `SOVERSION` is the major version, so you link against `libmodbusmq.so.2` and a
@@ -439,6 +451,27 @@ really is a complete exception reply and 0 otherwise, and name them with
 reads the byte at the code's offset whatever is there, which is only safe once
 you already know the frame is an exception.)
 
+### Logging
+
+The library logs through `modbusmq_logf()`: timestamped, errors to stderr, the
+rest to stdout. To route those lines into your own logger instead:
+
+```c
+#include "modbusmq_log.h"
+
+static void
+log_handler(int level, const char *message, void *user)
+{
+    // level is MODBUSMQ_LOG_ERROR, MODBUSMQ_LOG_INFO or MODBUSMQ_LOG_DEBUG.
+    // message has no timestamp, no level tag and no trailing newline.
+}
+
+modbusmq_log_set_handler(log_handler, NULL);   // NULL restores the default
+```
+
+The handler is process-wide, and messages are cut at 1023 bytes. Don't parse
+the text to detect failures: the return codes and `error_cb` above carry them.
+
 ---
 
 ## 8. Decoding values
@@ -569,7 +602,8 @@ the driver is enabled. The defaults are 10 ms and 1000 ms.
 - **Frames cap at `MODBUSMQ_FRAME_MAX` (260 bytes)**, the Modbus maximum.
 - **`modbusmq_set_slave()` affects frames built after it**, not the context
   globally in any retroactive sense.
-- **Only `modbusmq.h` and `modbusmq_time.h` are installed.** `modbusmq_internal.h`,
+- **Only `modbusmq.h`, `modbusmq_time.h`, `modbusmq_config.h` and
+  `modbusmq_log.h` are installed.** `modbusmq_internal.h`,
   `modbusmq_rtu.h` and `modbusmq_tcp.h` are not part of the API, and the context
   struct is opaque on purpose.
 

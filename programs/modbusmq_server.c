@@ -824,7 +824,7 @@ modbusmq_prepare_response(modbusmq_context_t *context, modbusmq_config_t *config
 
         // // header is 4 bytes
         // connection->msg.res_length = write + context->header_length + 3;
-        // modbusmq_logf(LOG_INFO, "msg.res_length = %d\n", connection->msg.res_length);
+        // modbusmq_logf(MODBUSMQ_LOG_INFO, "msg.res_length = %d\n", connection->msg.res_length);
         // if (write <= 0)
         // {
         //     // this means we did not find a respons, so mark the message with error
@@ -1016,24 +1016,24 @@ main(int argc, char **argv)
 
         if (rc < 0)
         {
-            modbusmq_logf(LOG_ERROR, "select failed: rc = %d\n", rc);
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "select failed: rc = %d\n", rc);
             exit(2);
         }
         else if (rc == 0)
         {
             // normal timeout
-            //modbusmq_logf(LOG_INFO, "select timeout\n");
+            //modbusmq_logf(MODBUSMQ_LOG_INFO, "select timeout\n");
             continue;
         }
 
-        // modbusmq_logf(LOG_INFO, "poll rc = %d\n", rc);
+        // modbusmq_logf(MODBUSMQ_LOG_INFO, "poll rc = %d\n", rc);
 
         if (FD_ISSET(GI.sd, &read_set))
         {
             int new_fd = accept(GI.sd, NULL, NULL);
             if (new_fd < 0)
             {
-                modbusmq_logf(LOG_ERROR, "accept failed: err=%s\n", strerror(errno));
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "accept failed: err=%s\n", strerror(errno));
             }
             else
             {
@@ -1045,7 +1045,7 @@ main(int argc, char **argv)
                 {
                     if (modbusmq_connections[i].fd == 0)
                     {
-                        modbusmq_logf(LOG_INFO, "TCP Client connect\n");
+                        modbusmq_logf(MODBUSMQ_LOG_INFO, "TCP Client connect\n");
                         memset(&modbusmq_connections[i], 0, sizeof(modbusmq_connection_t));
 
                         modbusmq_connections[i].fd = new_fd;
@@ -1065,7 +1065,7 @@ main(int argc, char **argv)
 
                 if (!accepted)
                 {
-                    modbusmq_logf(LOG_ERROR, "No free connection slot (max %d), rejecting client\n", MODBUSMQ_CONNECTION_MAX);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "No free connection slot (max %d), rejecting client\n", MODBUSMQ_CONNECTION_MAX);
                     close(new_fd);
                 }
             }
@@ -1094,7 +1094,7 @@ main(int argc, char **argv)
                     if (rc < 0)
                     {
                         context->err++;
-                        modbusmq_logf(LOG_ERROR, "Unable to read from socket: rc = %d\n", rc);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to read from socket: rc = %d\n", rc);
                         continue;
                     }
                     else if (rc == 0)
@@ -1109,7 +1109,7 @@ main(int argc, char **argv)
                     }                        
                     else
                     {
-                        //modbusmq_logf(LOG_INFO, "req read bytes=%d\n", rc);
+                        //modbusmq_logf(MODBUSMQ_LOG_INFO, "req read bytes=%d\n", rc);
                         //modbusmq_msg_debug(context, &connection->msg, 0);
                                 
                         rc = 0;
@@ -1136,7 +1136,7 @@ main(int argc, char **argv)
                     if (rc < 0)
                     {
                         context->err++;
-                        modbusmq_logf(LOG_ERROR, "Unable to write to socket: rc = %d, closing this connection\n", rc);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to write to socket: rc = %d, closing this connection\n", rc);
                         close(connection->fd);
                         connection->fd = 0;
                         continue;

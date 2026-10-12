@@ -7,5 +7,6 @@ Name: modbusmq
 Description: Single-threaded, event-driven Modbus TCP/RTU library
 URL: https://github.com/bjornwennberg71/modbusmq
 Version: @PROJECT_VERSION@
-Cflags: -I${includedir}
+Cflags: -I${includedir}/modbusmq
 Libs: -L${libdir} -lmodbusmq
+Libs.private: -lm
