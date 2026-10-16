@@ -1310,6 +1310,7 @@ mqtt_try_reconnect(modbusmq_connect_t *connect)
  
     modbusmq_logf(MODBUSMQ_LOG_INFO, "MQTT: attempting reconnect to %s:%d\n", connect->device, connect->port);
  
+    // TODO: blocks like the mosquitto_connect() in main(), same fix
     int rc = mosquitto_reconnect(GI.mosq);
     if (rc == MOSQ_ERR_SUCCESS)
     {
@@ -1545,6 +1546,9 @@ main(int argc, char **argv)
             mosquitto_message_callback_set(GI.mosq, &mqtt_message_callback);
         }
 
+        // TODO: mosquitto_connect() blocks until TCP gives up on a dead remote host.
+        //       Use mosquitto_connect_async() and finish the connect from the poll
+        //       loop (socket writable = connected). getaddrinfo() still blocks, but only ~10-30 s (resolv.conf timeout x attempts x nameservers).
         rc = mosquitto_connect(GI.mosq, connect.device, connect.port, 3600);
         if (rc != 0)
         {

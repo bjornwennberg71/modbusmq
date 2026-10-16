@@ -44,5 +44,10 @@ target_link_libraries(modbusmq_query modbusmq)
 add_executable(modbusmq_server modbusmq_server.c)
 target_link_libraries(modbusmq_server modbusmq)
 
+# emu.connect: live values over MQTT, same switch as modbusmq above
+if(MQTT_ENABLED)
+    target_link_libraries(modbusmq_server mosquitto)
+endif()
+
 install(TARGETS modbusmq_query modbusmq_prog modbusmq_server
         RUNTIME DESTINATION bin)

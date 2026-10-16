@@ -35,6 +35,12 @@
 #include <signal.h>
 
 #include <termios.h>
+#include <math.h>
+#include <ctype.h>
+
+#if MQTT_ENABLED
+#include <mosquitto.h>
+#endif
 
 #define MODBUSMQ_CONNECTION_MAX 10
 
@@ -62,10 +68,15 @@ typedef struct GlobalInfo
     // -e key=value entries, pointing straight into argv
     char       *overrides[MAX_CONFIG_OVERRIDES];
     int         noverrides;
+
+    // -e emu.* entries, kept apart so the config parser never sees them
+    char       *emu_options[MAX_CONFIG_OVERRIDES];
+    int         nemu_options;
 } GlobalInfo;
 
 
 GlobalInfo GI;
+
 static const char *program_name    = "modbusmq_server";
 static const char *program_version = MODBUSMQ_VERSION_STRING;
 
@@ -89,6 +100,14 @@ print_usage(int long_usage)
     printf("-e key=value : Override a config key, repeatable\n");
     printf("               e.g. -e modbusmq.connect=tcp://localhost:1502\n");
     printf("-v           : increase verbosity\n");
+    printf("\n");
+    printf("Live values from MQTT (needs a build with MQTT, -e only, not config keys):\n");
+    printf("emu.connect  : MQTT broker host:port. A message on <prefix><topic> sets the\n");
+    printf("               value every channel with that topic serves, as an engineering\n");
+    printf("               value (scaled back to registers). Absent: config defaults only\n");
+    printf("emu.prefix   : topic prefix, default emu/\n");
+    printf("               e.g. -e emu.connect=127.0.0.1:1883, then publish emu/soc 42.5\n");
+    printf("\n");
     printf("-h|--help : prints this help-text\n");
 }
 
@@ -132,12 +151,19 @@ parse_argv(int argc, char **argv)
                 fprintf(stderr, "-e %s: expected key=value\n", argv[a]);
                 return -1;
             }
-            if (GI.noverrides >= MAX_CONFIG_OVERRIDES)
+            if (GI.noverrides + GI.nemu_options >= MAX_CONFIG_OVERRIDES)
             {
                 fprintf(stderr, "-e: too many overrides (max %d)\n", MAX_CONFIG_OVERRIDES);
                 return -1;
             }
-            GI.overrides[GI.noverrides++] = argv[a];
+            if (strncmp(argv[a], "emu.", 4) == 0)
+            {
+                GI.emu_options[GI.nemu_options++] = argv[a];
+            }
+            else
+            {
+                GI.overrides[GI.noverrides++] = argv[a];
+            }
         }
         else if (strstr(argv[a], "--ver")) // --version
         {
@@ -423,6 +449,392 @@ modbusmq_server(modbusmq_context_t *context)
         return modbusmq_tcp_server(context);
     }
     return -1; // rtu not supported for server
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Live values from MQTT (emu.connect)
+//
+
+#if MQTT_ENABLED
+
+static modbusmq_config_t *emu_config;
+static const char        *emu_prefix_text;
+
+//
+// Engineering value to the register value the encoder wants: the inverse of
+// modbusmq_read_channel(), so mul, then mod, then add, undone in that order.
+// Integer formats round, because the encoder truncates.
+//
+static double
+emu_raw_value(const modbusmq_channel_t *channel, double value)
+{
+    double
+        raw = value;
+
+    if (channel->mul != 0)
+    {
+        raw /= channel->mul;
+    }
+    if (channel->mod > 0)
+    {
+        raw /= channel->mod;
+    }
+    else if (channel->mod < 0)
+    {
+        raw *= -(double)channel->mod;
+    }
+    raw -= channel->add;
+
+    switch (channel->format)
+    {
+    case modbusmq_data_format_float_abcd:
+    case modbusmq_data_format_float_badc:
+    case modbusmq_data_format_float_dcba:
+    case modbusmq_data_format_float_cdab:
+        return raw;
+    default:
+        break;
+    }
+
+    if (raw < 0)
+    {
+        return -(double)(int64_t)(-raw + 0.5);
+    }
+    return (double)(int64_t)(raw + 0.5);
+}
+
+//
+// The parser puts mqtt.topic_prefix (with %i already turned into the module
+// number) in front of every channel topic. Walk the prefix template along the
+// topic and return what is left, the channel's own topic. A topic that does
+// not start with the prefix is returned whole.
+//
+static const char *
+emu_own_topic(const char *prefix, const char *topic)
+{
+    const char
+        *p = prefix,
+        *t = topic;
+
+    if (!prefix)
+    {
+        return topic;
+    }
+
+    while (*p)
+    {
+        if (p[0] == '%' && p[1] == 'i')
+        {
+            if (!isdigit((unsigned char)*t))
+            {
+                return topic;
+            }
+            while (isdigit((unsigned char)*t))
+            {
+                t++;
+            }
+            p += 2;
+        }
+        else if (*p == *t)
+        {
+            p++;
+            t++;
+        }
+        else
+        {
+            return topic;
+        }
+    }
+    return t;
+}
+
+//
+// Hand one payload to every channel whose own topic equals rest.
+//
+static void
+emu_apply(modbusmq_config_t *config, const char *rest, const char *payload)
+{
+    double
+        value = 0;
+    char
+        *end = NULL;
+
+    value = strtod(payload, &end);
+    int
+        numeric_ok = (end != payload && *end == 0 && isfinite(value)),
+        accepted   = 0;
+
+    for(int i = 0; i < config->input_max; ++i)
+    {
+        modbusmq_input_t
+            *input = &config->inputs[i];
+
+        for(int c = 0; c < input->channel_max; ++c)
+        {
+            modbusmq_channel_t
+                *channel = &input->channels[c];
+
+            if (!channel->topic || strcmp(emu_own_topic(config->mqtt_topic_prefix, channel->topic), rest) != 0)
+            {
+                continue;
+            }
+
+            if (modbusmq_format_is_text(channel->format))
+            {
+                char
+                    *copy = strdup(payload);
+
+                if (!copy)
+                {
+                    continue;
+                }
+                free(channel->value_text);
+                channel->value_text = copy;
+            }
+            else
+            {
+                if (!numeric_ok)
+                {
+                    continue;
+                }
+                channel->value = emu_raw_value(channel, value);
+            }
+            accepted = 1;
+        }
+    }
+
+    if (!GI.verbose)
+    {
+        return;
+    }
+    if (accepted)
+    {
+        printf("emu: %s = %s\n", rest, payload);
+    }
+    else if (!numeric_ok)
+    {
+        printf("emu: %s: payload '%s' is not a number, ignored\n", rest, payload);
+    }
+}
+
+static void
+emu_connect_callback(struct mosquitto *mosq, void *userdata, int result)
+{
+    (void)userdata;
+
+    if (result != 0)
+    {
+        return;
+    }
+
+    char
+        topic[512];
+
+    snprintf(topic, sizeof(topic), "%s#", emu_prefix_text);
+    mosquitto_subscribe(mosq, NULL, topic, 0);
+}
+
+static void
+emu_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message)
+{
+    (void)mosq;
+    (void)userdata;
+
+    size_t
+        nprefix = strlen(emu_prefix_text);
+
+    if (!message->payload || message->payloadlen <= 0 || message->payloadlen > 1023)
+    {
+        return;
+    }
+    if (strncmp(message->topic, emu_prefix_text, nprefix) != 0)
+    {
+        return;
+    }
+
+    // the payload is not NUL terminated
+    char
+        payload[1024];
+
+    memcpy(payload, message->payload, message->payloadlen);
+    payload[message->payloadlen] = 0;
+
+    emu_apply(emu_config, message->topic + nprefix, payload);
+}
+
+#define EMU_RECONNECT_INTERVAL_MS 1000
+
+static struct mosquitto *emu_mosq;
+static int               emu_connected;
+static millitime_t       emu_reconnect_at_ms;
+
+static void
+emu_lost(const char *why)
+{
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "emu: %s, will reconnect\n", why);
+    emu_connected       = 0;
+    emu_reconnect_at_ms = millitime() + EMU_RECONNECT_INTERVAL_MS;
+}
+
+//
+// Add the broker socket to the server's select() sets, like programs/modbusmq.c.
+// Only ask for write when mosquitto has output pending, or select busy-spins.
+//
+static void
+emu_fd_set(fd_set *read_set, fd_set *write_set, int *fd_max)
+{
+    if (!emu_mosq || !emu_connected)
+    {
+        return;
+    }
+
+    int
+        fd = mosquitto_socket(emu_mosq);
+
+    if (fd < 0)
+    {
+        emu_lost("socket gone");
+        return;
+    }
+    FD_SET(fd, read_set);
+    if (mosquitto_want_write(emu_mosq))
+    {
+        FD_SET(fd, write_set);
+    }
+    *fd_max = MODBUSMQ_MAX(fd, *fd_max);
+}
+
+//
+// Run after every select(), timeout included: reconnect on a timer, else
+// read, write and keepalive. The connect callback resubscribes.
+//
+static void
+emu_service(fd_set *read_set, fd_set *write_set)
+{
+    if (!emu_mosq)
+    {
+        return;
+    }
+
+    if (!emu_connected)
+    {
+        if (millitime() < emu_reconnect_at_ms)
+        {
+            return;
+        }
+        // TODO: blocks like mosquitto_connect() in emu_start(), same fix
+        if (mosquitto_reconnect(emu_mosq) != MOSQ_ERR_SUCCESS)
+        {
+            emu_reconnect_at_ms = millitime() + EMU_RECONNECT_INTERVAL_MS;
+            return;
+        }
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "emu: connected\n");
+        emu_connected = 1;
+        return;
+    }
+
+    int
+        fd = mosquitto_socket(emu_mosq);
+
+    if (fd < 0)
+    {
+        emu_lost("socket gone");
+        return;
+    }
+    if (FD_ISSET(fd, read_set) && mosquitto_loop_read(emu_mosq, 1) != MOSQ_ERR_SUCCESS)
+    {
+        emu_lost("connection lost");
+        return;
+    }
+    if (FD_ISSET(fd, write_set) && mosquitto_loop_write(emu_mosq, 1) != MOSQ_ERR_SUCCESS)
+    {
+        emu_lost("connection lost");
+        return;
+    }
+    mosquitto_loop_misc(emu_mosq);
+}
+
+//
+// Create the client and connect once. A broker that is not up yet is not
+// fatal: emu_service() retries from the select loop.
+//
+static int
+emu_start(modbusmq_config_t *config, const char *connect_string, const char *prefix)
+{
+    modbusmq_connect_t
+        connect;
+    char
+        full[256];
+
+    // host:port is enough, the parser wants the tcp:// in front
+    if (strstr(connect_string, "://"))
+    {
+        snprintf(full, sizeof(full), "%s", connect_string);
+    }
+    else
+    {
+        snprintf(full, sizeof(full), "tcp://%s", connect_string);
+    }
+
+    if (modbusmq_parse_connect_string(full, &connect) != 0)
+    {
+        fprintf(stderr, "Unable to parse emu.connect: %s\n", connect_string);
+        return -1;
+    }
+
+    emu_config      = config;
+    emu_prefix_text = prefix;
+
+    mosquitto_lib_init();
+
+    emu_mosq = mosquitto_new(NULL, true, NULL);
+    if (!emu_mosq)
+    {
+        fprintf(stderr, "emu: unable to create mosquitto client\n");
+        return -1;
+    }
+
+    mosquitto_connect_callback_set(emu_mosq, &emu_connect_callback);
+    mosquitto_message_callback_set(emu_mosq, &emu_message_callback);
+
+    // TODO: mosquitto_connect() blocks until TCP gives up on a dead remote host.
+    //       Use mosquitto_connect_async() and finish the connect from the select
+    //       loop (socket writable = connected). getaddrinfo() still blocks, but only ~10-30 s (resolv.conf timeout x attempts x nameservers).
+    if (mosquitto_connect(emu_mosq, connect.device, connect.port, 60) != MOSQ_ERR_SUCCESS)
+    {
+        fprintf(stderr, "emu: unable to connect to %s, retrying every %d ms\n", connect_string, EMU_RECONNECT_INTERVAL_MS);
+        emu_reconnect_at_ms = millitime() + EMU_RECONNECT_INTERVAL_MS;
+    }
+    else
+    {
+        emu_connected = 1;
+    }
+
+    printf("emu: values from %s, prefix %s\n", connect_string, prefix);
+    return 0;
+}
+
+#endif // MQTT_ENABLED
+
+//
+// emu.connect and emu.prefix come only from -e (they are server options, not
+// device config, so the library's config struct stays as it is).
+//
+static const char *
+emu_option(const char *key)
+{
+    size_t
+        nkey = strlen(key);
+
+    for(int o = 0; o < GI.nemu_options; ++o)
+    {
+        if (strncmp(GI.emu_options[o], key, nkey) == 0 && GI.emu_options[o][nkey] == '=')
+        {
+            return GI.emu_options[o] + nkey + 1;
+        }
+    }
+    return NULL;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -885,6 +1297,31 @@ main(int argc, char **argv)
     modbusmq_config_t
         *modbusmq_config = modbusmq_config_get();
     //
+    // live values from MQTT, off unless emu.connect is set
+    //
+    const char
+        *emu_connect = emu_option("emu.connect"),
+        *emu_prefix  = emu_option("emu.prefix");
+
+    if (emu_connect && strlen(emu_connect) > 0)
+    {
+#if MQTT_ENABLED
+        if (!emu_prefix || strlen(emu_prefix) == 0)
+        {
+            emu_prefix = "emu/";
+        }
+        rc = emu_start(modbusmq_config, emu_connect, emu_prefix);
+        if (rc < 0)
+        {
+            return -2;
+        }
+#else
+        fprintf(stderr, "emu.connect is set but this build has MQTT disabled -- rebuild with --enable-mqtt\n");
+        return -2;
+#endif
+    }
+
+    //
     // connect to device
     //
     struct modbusmq_context_t
@@ -984,6 +1421,9 @@ main(int argc, char **argv)
         FD_SET(GI.sd, &err_set);
         fd_max = MODBUSMQ_MAX(GI.sd, fd_max);
 
+#if MQTT_ENABLED
+        emu_fd_set(&read_set, &write_set, &fd_max);
+#endif
         
         for(int i = 0; i < MODBUSMQ_CONNECTION_MAX; ++i)
         {
@@ -1011,6 +1451,14 @@ main(int argc, char **argv)
         tv.tv_usec = millisleep * 1000;
         
         rc = select(fd_max+1, &read_set, &write_set, NULL, &tv);
+
+#if MQTT_ENABLED
+        // before the timeout check: reconnect and keepalive run on timeouts too
+        if (rc >= 0)
+        {
+            emu_service(&read_set, &write_set);
+        }
+#endif
 
         
 
