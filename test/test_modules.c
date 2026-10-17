@@ -238,6 +238,10 @@ test_rules(void)
     CHECK_INT(parse_text("input.max = 1\n" FIXED_INPUT(1, "g")
                          "input.1.interval_ms = once\n", NULL, 0), 0, "interval_ms = once");
     CHECK_INT(modbusmq_config_get()->inputs[0].interval, MODBUSMQ_INTERVAL_ONCE, "...parses as once");
+    CHECK(parse_text("input.max = 1\n"
+                     "input.1.slave = 7\ninput.1.type = input_register\ninput.1.address = 0\ninput.1.naddress = 1\n"
+                     "input.1.channel.max = 1\ninput.1.channel.1.offset = 0\ninput.1.channel.1.format = uint_ab\n"
+                     "input.1.channel.1.topic = g\n", NULL, 0) < 0, "an input without interval_ms is refused");
 
     // mixed: a fixed input first, then a template, %% is a literal %
     CHECK_INT(parse_text("module.count = 2\n"

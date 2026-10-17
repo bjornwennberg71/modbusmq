@@ -2647,6 +2647,25 @@ config_parse_stream(FILE *fp, const char *name)
             }
         }
     }
+    else
+    {
+        // without an interval the input would trip the subscribe assert, or poll without pause
+        for(int i = 0; i < modbusmq_config->input_max; ++i)
+        {
+            modbusmq_input_t
+                *input = &modbusmq_config->inputs[i];
+            char
+                label[96];
+
+            if (input->interval > 0 || input->interval == MODBUSMQ_INTERVAL_ONCE)
+            {
+                continue;
+            }
+            modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s: interval_ms is required, in ms or once\n",
+                          config_input_label(label, sizeof(label), i, -1, input));
+            return -1;
+        }
+    }
 
     //
     // A coil or discrete input carries one bit per address, so its channels

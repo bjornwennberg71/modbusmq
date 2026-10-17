@@ -49,5 +49,11 @@ if(MQTT_ENABLED)
     target_link_libraries(modbusmq_server mosquitto)
 endif()
 
-install(TARGETS modbusmq_query modbusmq_prog modbusmq_server
+#
+# modbusmq_config: check a config, convert old key names
+#
+add_executable(modbusmq_config modbusmq_config.c)
+target_link_libraries(modbusmq_config modbusmq)
+
+install(TARGETS modbusmq_query modbusmq_prog modbusmq_server modbusmq_config
         RUNTIME DESTINATION bin)
