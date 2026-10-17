@@ -1436,7 +1436,7 @@ modbusmq_config_parse(const char *filename)
     ssize_t
         nread;
     size_t
-        line_len;
+        line_len = 0;
     int
         line_num = 0,
         seen_module_count       = 0,
@@ -1463,7 +1463,7 @@ modbusmq_config_parse(const char *filename)
     modbusmq_config->module_count       = 0; // module templates off
     modbusmq_config->module_slave_first = 1;
     
-    while ((nread = getline(&line, &line_len, fp)) != -1)
+    while ((nread = getline(&line, &line_len, fp)) > 0)
     {
         line_num++;
 
