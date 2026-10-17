@@ -145,6 +145,9 @@ extern int  modbusmq_loop_write_read(struct modbusmq_context_t *context, int rev
     // back lowered to whenever the next subscription is due, or unchanged if
     // none is due sooner. Pass 0 for no ceiling of your own and get the 1000 ms
     // default.
+    //
+    // poll_events is out only: it is overwritten, not ORed into (2.5.3), so add
+    // any bits of your own after the call.
 extern int modbusmq_loop_prepare(    struct modbusmq_context_t *context, millitime_t *sleep_time, int16_t *poll_events);
 
     // callbacks

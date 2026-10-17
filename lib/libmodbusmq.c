@@ -4823,7 +4823,8 @@ modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sle
  * 
  * @param context: allocated context
  * @param sleep_time: out parameter with maximum time to sleep in milliseconds
- * @param events: out parameter with POLLIN/POLLOUT mask for Modbusmq fd
+ * @param events: out parameter with POLLIN/POLLOUT mask for Modbusmq fd;
+ *                overwritten, so the caller adds its own bits after the call
  *
  * @return the descriptor to poll, or -1 when there is no connection
  */
@@ -4836,6 +4837,9 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
         errno = EINVAL;
         return -1;
     }
+
+    // out parameter: the code below only ORs bits in
+    *events = 0;
 
     if (context->fd < 0)
     {
