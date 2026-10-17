@@ -289,7 +289,7 @@ extern int   modbusmq_channel_in_range(struct modbusmq_context_t *context, modbu
 // decimal count the same way for modbusmq and anything else that
 // prints a channel: an explicit channel.decimals wins, otherwise a bit
 // channel gets 0, a float format gets 3, and an integer format follows its
-// mod divisor (mod=-100 -> 2 decimals, and so on) — see libmodbusmq.c for the
+// mod divisor (mod=-100 -> 2 decimals, and so on) — see modbusmq.c for the
 // exact rule. A negative-zero result ("-0", "-0.000") is normalised to plain
 // zero, since it reads as a sign flip that never happened.
 //
@@ -311,7 +311,7 @@ extern int   modbusmq_channel_format_value(const struct modbusmq_input_t *input,
 //
 // See modbusmq_channel_t in modbusmq_config.h for what on_change/min_change/
 // min_change_rel/min_interval/max_interval mean; the precedence between them
-// is documented on the implementation in libmodbusmq.c.
+// is documented on the implementation in modbusmq.c.
 //
 // Returns 1 = publish, 0 = suppress, < 0 on bad arguments.
 //
