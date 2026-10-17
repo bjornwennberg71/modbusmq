@@ -42,7 +42,9 @@
 #include <mosquitto.h>
 #endif
 
-#define MODBUSMQ_CONNECTION_MAX 10
+#define MODBUSMQ_CONNECTION_DEFAULT 10
+// select(): every fd must stay below FD_SETSIZE; leave room for stdio, listen and broker sockets
+#define MODBUSMQ_CONNECTION_LIMIT   (FD_SETSIZE - 16)
 
 typedef struct modbusmq_connection_t
 {
@@ -51,7 +53,9 @@ typedef struct modbusmq_connection_t
     millitime_t    last_rx_ms; // accept or last read, picks who to evict when full
 } modbusmq_connection_t;
 
-modbusmq_connection_t modbusmq_connections[MODBUSMQ_CONNECTION_MAX];
+// calloc()ed once in main(), -e server.connection_max slots
+static modbusmq_connection_t *modbusmq_connections;
+static int                    connection_max = MODBUSMQ_CONNECTION_DEFAULT;
 
 //
 // 
@@ -70,9 +74,9 @@ typedef struct GlobalInfo
     char       *overrides[MAX_CONFIG_OVERRIDES];
     int         noverrides;
 
-    // -e emu.* entries, kept apart so the config parser never sees them
-    char       *emu_options[MAX_CONFIG_OVERRIDES];
-    int         nemu_options;
+    // -e emu.* and server.* entries, kept apart so the config parser never sees them
+    char       *server_options[MAX_CONFIG_OVERRIDES];
+    int         nserver_options;
 } GlobalInfo;
 
 
@@ -108,6 +112,9 @@ print_usage(int long_usage)
     printf("               value (scaled back to registers). Absent: config defaults only\n");
     printf("emu.prefix   : topic prefix, default emu/\n");
     printf("               e.g. -e emu.connect=127.0.0.1:1883, then publish emu/soc 42.5\n");
+    printf("\n");
+    printf("server.connection_max : client slots, default %d, -e only. When all are taken the\n", MODBUSMQ_CONNECTION_DEFAULT);
+    printf("               client idle longest is dropped for the new one\n");
     printf("\n");
     printf("-h|--help : prints this help-text\n");
 }
@@ -152,14 +159,14 @@ parse_argv(int argc, char **argv)
                 fprintf(stderr, "-e %s: expected key=value\n", argv[a]);
                 return -1;
             }
-            if (GI.noverrides + GI.nemu_options >= MAX_CONFIG_OVERRIDES)
+            if (GI.noverrides + GI.nserver_options >= MAX_CONFIG_OVERRIDES)
             {
                 fprintf(stderr, "-e: too many overrides (max %d)\n", MAX_CONFIG_OVERRIDES);
                 return -1;
             }
-            if (strncmp(argv[a], "emu.", 4) == 0)
+            if (strncmp(argv[a], "emu.", 4) == 0 || strncmp(argv[a], "server.", 7) == 0)
             {
-                GI.emu_options[GI.nemu_options++] = argv[a];
+                GI.server_options[GI.nserver_options++] = argv[a];
             }
             else
             {
@@ -198,7 +205,6 @@ void
 modbusmq_server_init()
 {
     memset(&GI, 0, sizeof(GI));
-    memset(&modbusmq_connections, 0, sizeof(modbusmq_connections));
 }
 
 int set_nonblocking(int fd)
@@ -823,16 +829,16 @@ emu_start(modbusmq_config_t *config, const char *connect_string, const char *pre
 // device config, so the library's config struct stays as it is).
 //
 static const char *
-emu_option(const char *key)
+server_option(const char *key)
 {
     size_t
         nkey = strlen(key);
 
-    for(int o = 0; o < GI.nemu_options; ++o)
+    for(int o = 0; o < GI.nserver_options; ++o)
     {
-        if (strncmp(GI.emu_options[o], key, nkey) == 0 && GI.emu_options[o][nkey] == '=')
+        if (strncmp(GI.server_options[o], key, nkey) == 0 && GI.server_options[o][nkey] == '=')
         {
-            return GI.emu_options[o] + nkey + 1;
+            return GI.server_options[o] + nkey + 1;
         }
     }
     return NULL;
@@ -1297,12 +1303,38 @@ main(int argc, char **argv)
 
     modbusmq_config_t
         *modbusmq_config = modbusmq_config_get();
+
+    const char
+        *connection_text = server_option("server.connection_max");
+
+    if (connection_text)
+    {
+        char
+            *end = NULL;
+        long
+            n = strtol(connection_text, &end, 10);
+
+        if (end == connection_text || *end != 0 || n < 1 || n > MODBUSMQ_CONNECTION_LIMIT)
+        {
+            fprintf(stderr, "server.connection_max must be 1..%d, got '%s'\n", MODBUSMQ_CONNECTION_LIMIT, connection_text);
+            return -2;
+        }
+        connection_max = (int)n;
+    }
+
+    modbusmq_connections = calloc(connection_max, sizeof(*modbusmq_connections));
+    if (!modbusmq_connections)
+    {
+        fprintf(stderr, "Unable to allocate %d connection slots\n", connection_max);
+        return -2;
+    }
+
     //
     // live values from MQTT, off unless emu.connect is set
     //
     const char
-        *emu_connect = emu_option("emu.connect"),
-        *emu_prefix  = emu_option("emu.prefix");
+        *emu_connect = server_option("emu.connect"),
+        *emu_prefix  = server_option("emu.prefix");
 
     if (emu_connect && strlen(emu_connect) > 0)
     {
@@ -1426,7 +1458,7 @@ main(int argc, char **argv)
         emu_fd_set(&read_set, &write_set, &fd_max);
 #endif
         
-        for(int i = 0; i < MODBUSMQ_CONNECTION_MAX; ++i)
+        for(int i = 0; i < connection_max; ++i)
         {
             modbusmq_connection_t
                 *connection = &modbusmq_connections[i];
@@ -1493,7 +1525,7 @@ main(int argc, char **argv)
                     slot   = -1,
                     oldest = 0;
 
-                for (int i = 0; i < MODBUSMQ_CONNECTION_MAX; ++i)
+                for (int i = 0; i < connection_max; ++i)
                 {
                     if (modbusmq_connections[i].fd == 0)
                     {
@@ -1515,7 +1547,7 @@ main(int argc, char **argv)
                 {
                     slot = oldest;
                     modbusmq_logf(MODBUSMQ_LOG_ERROR, "No free connection slot (max %d), dropping client fd %d, idle %llu ms\n",
-                                  MODBUSMQ_CONNECTION_MAX, modbusmq_connections[slot].fd,
+                                  connection_max, modbusmq_connections[slot].fd,
                                   (unsigned long long)(millitime() - modbusmq_connections[slot].last_rx_ms));
                     close(modbusmq_connections[slot].fd);
                 }
@@ -1538,7 +1570,7 @@ main(int argc, char **argv)
                     
         modbusmq_connection_t
             *connection = NULL;
-        for(int i = 0; i < MODBUSMQ_CONNECTION_MAX; ++i)
+        for(int i = 0; i < connection_max; ++i)
         {
             connection = &modbusmq_connections[i];
             if (connection->fd == 0)
