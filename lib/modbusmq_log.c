@@ -54,7 +54,7 @@ modbusmq_logf(int level, const char *format, ...)
 
     if (log_handler)
     {
-        char message[1024];
+        char message[256];
 
         va_start(ap, format);
         vsnprintf(message, sizeof(message), format, ap);

@@ -4491,11 +4491,11 @@ modbusmq_round_busy(modbusmq_context_t *context)
 static int
 modbusmq_round_next_deep_slave(modbusmq_context_t *context)
 {
-    int
-        order[256],
-        norder = 0;
     uint8_t
+        order[256],
         seen[256];
+    int
+        norder = 0;
 
     memset(seen, 0, sizeof(seen));
 
