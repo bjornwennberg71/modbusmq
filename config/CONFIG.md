@@ -92,20 +92,22 @@ RTU connect string format: `rtu:///device:baudrate:stopbits:databits:parity`
 ### Timing
 
 ```
-modbusmq.frame_timeout = 1000    # milliseconds — give up waiting for a response after this
-modbusmq.rts_delay     = 10000   # microseconds — pause before transmitting (RTU only)
-modbusmq.slave_retry_max = 300000 # milliseconds — backoff cap for a slave that stopped answering, 0 = off
+modbusmq.frame_timeout_ms = 1000    # milliseconds — give up waiting for a response after this
+modbusmq.rts_delay_us     = 10000   # microseconds — pause before transmitting (RTU only)
+modbusmq.slave_retry_max_ms = 300000 # milliseconds — backoff cap for a slave that stopped answering, 0 = off
 ```
 
-`slave_retry_max`: after 3 timeouts in a row a slave is marked unresponsive and its inputs are skipped, so one dead device no longer costs every poll cycle a `frame_timeout`. It is probed with one read after 1 s, then 2 s, 4 s and so on up to `slave_retry_max`, and read normally again from its first answer. An exception reply counts as an answer.
+Since 2.5.3 every time key carries its unit: `frame_timeout_ms`, `rts_delay_us`, `slave_retry_max_ms`, and `interval_ms`, `round_interval_ms`, `min_interval_ms`, `max_interval_ms` wherever they appear. There is no alias: an old name is logged as `Unknown config` and ignored.
 
-`input.N.interval = once` reads the input at startup, after every reconnect and when its slave answers again after being unresponsive, and not otherwise. Meant for serial numbers, firmware versions and ratings. A once read without a valid reply is retried every 10 s. In rounds mode it is read every round until it has answered. Publish it with `retain = 1` so a late subscriber still gets it.
+`slave_retry_max_ms`: after 3 timeouts in a row a slave is marked unresponsive and its inputs are skipped, so one dead device no longer costs every poll cycle a `frame_timeout_ms`. It is probed with one read after 1 s, then 2 s, 4 s and so on up to `slave_retry_max_ms`, and read normally again from its first answer. An exception reply counts as an answer.
 
-`frame_timeout` defaults to 1000 ms. For slow devices or debugging, increase it.
+`input.N.interval_ms = once` reads the input at startup, after every reconnect and when its slave answers again after being unresponsive, and not otherwise. Meant for serial numbers, firmware versions and ratings. A once read without a valid reply is retried every 10 s. In rounds mode it is read every round until it has answered. Publish it with `retain = 1` so a late subscriber still gets it.
 
-`rts_delay` defaults to 10000 µs (10 ms). Needed on half-duplex RS-485 to let the bus settle before transmitting. Increase if you see lost frames.
+`frame_timeout_ms` defaults to 1000 ms. For slow devices or debugging, increase it.
 
-#### Setting `frame_timeout` for RTU
+`rts_delay_us` defaults to 10000 µs (10 ms). Needed on half-duplex RS-485 to let the bus settle before transmitting. Increase if you see lost frames.
+
+#### Setting `frame_timeout_ms` for RTU
 
 Set it above the device's worst-case turnaround, not its typical one. When a
 response arrives *after* its request has timed out, that reply is still on the
@@ -121,7 +123,7 @@ publishing another block's registers under this block's topics.
 
 A timeout that is merely tight therefore shows up as gaps and `Waited ... ms for
 a response` in the log rather than as wrong values. If you see those regularly,
-raise `frame_timeout`.
+raise `frame_timeout_ms`.
 
 ---
 
@@ -158,7 +160,7 @@ input.N.type           = input_register   # see the table below
 input.N.address        = 0x0FFF           # start register address (hex or decimal)
 input.N.address_offset = 0        # registers/coils to skip at the start of the block, see below
 input.N.naddress       = 0x27             # number of registers to read
-input.N.interval       = 1000             # polling interval in milliseconds (ignored in rounds mode), or once
+input.N.interval_ms       = 1000             # polling interval in milliseconds (ignored in rounds mode), or once
 input.N.tier           = fast             # rounds mode only: fast (or 0, default) or deep (or 1)
 input.N.channel.max    = 13               # number of channels — must come before channel keys
 
@@ -167,8 +169,8 @@ input.N.channel.max    = 13               # number of channels — must come bef
 input.N.on_change      = 0                # publish only when the printed text changes
 input.N.min_change     = 0                # publish only when the value moves by at least this much
 input.N.min_change_rel = 0                # ...or by at least this fraction of the value, whichever is larger
-input.N.min_interval   = 0                # never publish more often than this, in ms
-input.N.max_interval   = 0                # heartbeat: publish anyway after this long, in ms
+input.N.min_interval_ms   = 0                # never publish more often than this, in ms
+input.N.max_interval_ms   = 0                # heartbeat: publish anyway after this long, in ms
 ```
 
 | type               | Modbus | Reads                    | `naddress` counts | `channel.offset` is |
@@ -206,7 +208,7 @@ is too slow there, and most of it changes slowly anyway.
 
 ```
 input.query_mode     = rounds
-input.round_interval = 1000   # ms, minimum period of one round; 0 (default) = back to back
+input.round_interval_ms = 1000   # ms, minimum period of one round; 0 (default) = back to back
 input.1.tier         = fast   # pack totals: every round
 input.2.tier         = deep   # cell voltages: one pack per round
 ```
@@ -221,15 +223,15 @@ A round is:
    [LIBMODBUSMQ.md](../LIBMODBUSMQ.md).
 
 The next round starts when every request of this one has completed (answered,
-timed out or failed) **and** `round_interval` has passed since this one
+timed out or failed) **and** `round_interval_ms` has passed since this one
 started. Requests go out one at a time, as in every mode. A write arriving from
-MQTT still goes out ahead of the polls left in the round. `input.N.interval` is
+MQTT still goes out ahead of the polls left in the round. `input.N.interval_ms` is
 ignored, and a warning says so when it is set.
 
 **Bus time at 9600 8N1.** A byte is 10 bits, so the line carries about 960
 bytes/s, about 1 ms per byte. A read of n registers is an 8-byte request and a
 5 + 2n byte response, plus about 30 ms of turnaround (the device's reply delay,
-the silent gaps and `rts_delay`). So:
+the silent gaps and `rts_delay_us`). So:
 
 | read | bytes | time |
 |---|---|---|
@@ -317,7 +319,7 @@ module.slave_first = 39
 
 input.max            = 3
 input.query_mode     = rounds
-input.round_interval = 1000
+input.round_interval_ms = 1000
 
 input.1.slave       = module
 input.1.type        = input_register
@@ -386,7 +388,7 @@ input.2.slave       = 39
 input.2.type        = discrete_input
 input.2.address     = 0x0000
 input.2.naddress    = 16                  # 16 bits
-input.2.interval    = 2000
+input.2.interval_ms    = 2000
 input.2.channel.max = 2
 
 input.2.channel.1.offset = 0              # the bit at address 0x0000
@@ -440,8 +442,8 @@ input.N.channel.M.decimals       = 2     # decimal places when printing/publishi
 input.N.channel.M.on_change      = 0     # publish only when the printed text changes
 input.N.channel.M.min_change     = 0.5   # publish only when the value moves by at least this much
 input.N.channel.M.min_change_rel = 0.001 # ...or by at least this fraction of the value (0.001 = 0.1%)
-input.N.channel.M.min_interval   = 5000  # never publish more often than this, in ms
-input.N.channel.M.max_interval   = 60000 # heartbeat: publish anyway after this long, in ms
+input.N.channel.M.min_interval_ms   = 5000  # never publish more often than this, in ms
+input.N.channel.M.max_interval_ms   = 60000 # heartbeat: publish anyway after this long, in ms
 ```
 
 Only `offset`, `format`, and `topic` are required — plus `length` or `nregisters` for a variable-width text format. `add`, `mod`, `mul`, and `value` are optional.
@@ -570,10 +572,10 @@ rather than ignored — there is no number to scale or round. `add` is accepted
 only on an `epoch32_*` channel, as the epoch shift above. `min_change` and
 `min_change_rel` are magnitude gates and are rejected too; use `on_change`,
 which compares the published text and is what you wanted anyway. `on_change`,
-`min_interval` and `max_interval` all work normally.
+`min_interval_ms` and `max_interval_ms` all work normally.
 
 A serial number typically wants `on_change = 1` with `retain = 1`, and a
-`max_interval` heartbeat if consumers read publish cadence as liveness.
+`max_interval_ms` heartbeat if consumers read publish cadence as liveness.
 
 **Text formats are read-only.** A `write.N.format` naming one is rejected:
 writing a string or a clock back to a device is a different job, with different
@@ -711,16 +713,16 @@ which is today's behaviour: publish every poll.
   moment wins. A reading near zero is floored at a reference of `1.0` before
   the fraction is applied, so a relative threshold never shrinks to nothing
   just because the value passed through zero.
-- **`min_interval`** (milliseconds, default `0`): never publish this channel
+- **`min_interval_ms`** (milliseconds, default `0`): never publish this channel
   more often than this. A change that arrives inside the window is **dropped,
   not queued** — the next poll still compares against the last value actually
   published, so a real change is still caught once the window has passed, just
   not the instant it happened.
-- **`max_interval`** (milliseconds, default `0` = off): a heartbeat. Publish
+- **`max_interval_ms`** (milliseconds, default `0` = off): a heartbeat. Publish
   regardless of the above once this long has passed since the last publish, so
   a subscriber can tell the channel is still alive even when nothing changed.
   Since this is only checked when a poll lands, it effectively **rounds up to
-  the next poll interval** — `max_interval = 3000` on a channel polled every
+  the next poll interval** — `max_interval_ms = 3000` on a channel polled every
   2000 ms fires around 4000 ms, not 3000.
 
 "Unchanged" for `on_change`, and for deciding whether the value moved at all,
@@ -729,7 +731,7 @@ the raw float. A reading wobbling in the noise below the last printed digit
 does not count as a change.
 
 Precedence, in order: never published yet always publishes; then the
-heartbeat; then `min_interval` can suppress a value that would otherwise go
+heartbeat; then `min_interval_ms` can suppress a value that would otherwise go
 out; only then do `on_change`/`min_change`/`min_change_rel` get a say.
 
 **Recommended combinations:**
@@ -738,13 +740,13 @@ out; only then do `on_change`/`min_change`/`min_change_rel` get a say.
 # Alarm / status bits: only publish when something actually changes, but say
 # you're still alive once an hour even if nothing did.
 input.2.channel.1.on_change    = 1
-input.2.channel.1.max_interval = 3600000
+input.2.channel.1.max_interval_ms = 3600000
 
 # A temperature: ignore poll-to-poll jitter under half a degree, never more
 # than once every 5s, but heartbeat once a minute.
-input.1.channel.4.min_interval   = 5000
+input.1.channel.4.min_interval_ms   = 5000
 input.1.channel.4.min_change     = 0.5
-input.1.channel.4.max_interval   = 60000
+input.1.channel.4.max_interval_ms   = 60000
 
 # A power reading that swings across a wide range: a fixed min_change is
 # either too tight at high power or too loose at low power, so use a
@@ -758,7 +760,7 @@ the reason — nothing is silently dropped from the log, only from the broker.
 **Interaction with `retain`:** with `min_change` (or `on_change`/
 `min_change_rel`) set and `retain = 0`, a subscriber connecting between
 publishes sees nothing for this channel until it next changes or heartbeats.
-Pair a suppressive setting with either `retain = 1` or a `max_interval`, or a
+Pair a suppressive setting with either `retain = 1` or a `max_interval_ms`, or a
 fresh subscriber can be left looking at a channel that appears dead.
 
 ---
@@ -955,7 +957,7 @@ The payload is JSON:
 | `encode` | a value does not fit its format. Rejected rather than truncated |
 | `offline` | the device is not connected. No `req` |
 | `queue` | the request could not be queued. No `req` |
-| `timeout` | the request went out and nothing came back within `modbusmq.frame_timeout` |
+| `timeout` | the request went out and nothing came back within `modbusmq.frame_timeout_ms` |
 | `exception` | the device answered, and the answer was no. `code` and `message` name it |
 | `protocol` | a reply came back that was not a valid answer to this request |
 | `transport` | the connection went away with the request still outstanding |
@@ -1057,15 +1059,15 @@ at the top level, as the bottom rung under `input.N.*` and
 publish.on_change      = 0
 publish.min_change     = 0
 publish.min_change_rel = 0
-publish.min_interval   = 0
-publish.max_interval   = 0
+publish.min_interval_ms   = 0
+publish.max_interval_ms   = 0
 ```
 
 A channel takes its own value if it sets one, else its input's, else this one.
-Each key resolves independently, so `publish.min_interval = 1000` does not
+Each key resolves independently, so `publish.min_interval_ms = 1000` does not
 drag `on_change` along with it for a channel that never asked for it. Useful
 for a whole config that should default to, say, a one-minute heartbeat without
-repeating `max_interval = 60000` on every input.
+repeating `max_interval_ms = 60000` on every input.
 
 ---
 
@@ -1074,8 +1076,8 @@ repeating `max_interval = 60000` on every input.
 ```
 # Shoto V2 battery — single module via RTU
 modbusmq.connect      = rtu:///dev/ttyUSB0:9600:1:8:N
-modbusmq.rts_delay    = 10000   # 10 ms
-modbusmq.frame_timeout = 1000
+modbusmq.rts_delay_us    = 10000   # 10 ms
+modbusmq.frame_timeout_ms = 1000
 
 input.max        = 1
 input.query_mode = series
@@ -1084,7 +1086,7 @@ input.1.slave       = 39
 input.1.type        = input_register
 input.1.address     = 0x0FFF
 input.1.naddress    = 0x27
-input.1.interval    = 1000
+input.1.interval_ms    = 1000
 input.1.channel.max = 4
 
 # Voltage: raw is in hundredths of a volt

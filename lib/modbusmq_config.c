@@ -1460,7 +1460,6 @@ config_parse_stream(FILE *fp, const char *name)
         line_num = 0,
         seen_module_count       = 0,
         seen_module_slave_first = 0;
-
     if (!modbusmq_config)
     {
         modbusmq_config = malloc(sizeof(modbusmq_config_t));
@@ -1564,15 +1563,15 @@ config_parse_stream(FILE *fp, const char *name)
         {
             modbusmq_config->modbusmq_parity = value[0];
         }
-        else if (strcmp(key, "modbusmq.rts_delay") == 0)
+        else if (strcmp(key, "modbusmq.rts_delay_us") == 0)
         {
             modbusmq_config->modbusmq_rts_delay_us = strtol(value, NULL, 0);
         }
-        else if (strcmp(key, "modbusmq.frame_timeout") == 0)
+        else if (strcmp(key, "modbusmq.frame_timeout_ms") == 0)
         {
             modbusmq_config->modbusmq_frame_timeout_ms = strtol(value, NULL, 0);
         }
-        else if (strcmp(key, "modbusmq.slave_retry_max") == 0)
+        else if (strcmp(key, "modbusmq.slave_retry_max_ms") == 0)
         {
             modbusmq_config->modbusmq_slave_retry_max_ms = strtol(value, NULL, 0);
             if (modbusmq_config->modbusmq_slave_retry_max_ms < 0)
@@ -1600,12 +1599,12 @@ config_parse_stream(FILE *fp, const char *name)
                 modbusmq_config->query_mode = modbusmq_query_mode_parallell;
             }
         }
-        else if (strcmp(key, "input.round_interval") == 0)
+        else if (strcmp(key, "input.round_interval_ms") == 0)
         {
             modbusmq_config->round_interval_ms = (int)strtol(value, NULL, 0);
             if (modbusmq_config->round_interval_ms < 0)
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: round_interval must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: round_interval_ms must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -1735,7 +1734,7 @@ config_parse_stream(FILE *fp, const char *name)
             {
                 input->naddress = (int)strtoul(value, NULL, 0);
             }
-            else if (strcmp(input_key, "interval") == 0)
+            else if (strcmp(input_key, "interval_ms") == 0)
             {
                 int
                     rc = config_read_interval(&input->interval, value);
@@ -1806,24 +1805,24 @@ config_parse_stream(FILE *fp, const char *name)
                 }
                 input->has_min_change = 1;
             }
-            else if (strcmp(input_key, "min_interval") == 0)
+            else if (strcmp(input_key, "min_interval_ms") == 0)
             {
                 input->min_interval = (int)strtol(value, NULL, 0);
                 if (input->min_interval < 0)
                 {
-                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval_ms must not be negative\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
                 }
                 input->has_min_interval = 1;
             }
-            else if (strcmp(input_key, "max_interval") == 0)
+            else if (strcmp(input_key, "max_interval_ms") == 0)
             {
                 input->max_interval = (int)strtol(value, NULL, 0);
                 if (input->max_interval < 0)
                 {
-                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval_ms must not be negative\n", line_num, key, value);
                     fclose(fp);
                     free(line);
                     return -1;
@@ -2062,24 +2061,24 @@ config_parse_stream(FILE *fp, const char *name)
                     }
                     channel->has_min_change_rel = 1;
                 }
-                else if (strcmp(channel_key, "min_interval") == 0)
+                else if (strcmp(channel_key, "min_interval_ms") == 0)
                 {
                     channel->min_interval = (int)strtol(value, NULL, 0);
                     if (channel->min_interval < 0)
                     {
-                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval_ms must not be negative\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
                     }
                     channel->has_min_interval = 1;
                 }
-                else if (strcmp(channel_key, "max_interval") == 0)
+                else if (strcmp(channel_key, "max_interval_ms") == 0)
                 {
                     channel->max_interval = (int)strtol(value, NULL, 0);
                     if (channel->max_interval < 0)
                     {
-                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval_ms must not be negative\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
@@ -2507,24 +2506,24 @@ config_parse_stream(FILE *fp, const char *name)
             }
             modbusmq_config->has_publish_min_change_rel = 1;
         }
-        else if (strcmp(key, "publish.min_interval") == 0)
+        else if (strcmp(key, "publish.min_interval_ms") == 0)
         {
             modbusmq_config->publish_min_interval = (int)strtol(value, NULL, 0);
             if (modbusmq_config->publish_min_interval < 0)
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: min_interval_ms must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
             }
             modbusmq_config->has_publish_min_interval = 1;
         }
-        else if (strcmp(key, "publish.max_interval") == 0)
+        else if (strcmp(key, "publish.max_interval_ms") == 0)
         {
             modbusmq_config->publish_max_interval = (int)strtol(value, NULL, 0);
             if (modbusmq_config->publish_max_interval < 0)
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval must not be negative\n", line_num, key, value);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: max_interval_ms must not be negative\n", line_num, key, value);
                 fclose(fp);
                 free(line);
                 return -1;
@@ -2606,7 +2605,7 @@ config_parse_stream(FILE *fp, const char *name)
             //
             if (modbusmq_config->inputs[i].interval > 0 && modbusmq_config->inputs[i].module <= 0)
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "WARNING: input.%d.interval is ignored in query_mode rounds\n", i+1);
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "WARNING: input.%d.interval_ms is ignored in query_mode rounds\n", i+1);
             }
         }
     }

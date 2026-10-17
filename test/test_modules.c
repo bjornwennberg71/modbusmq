@@ -77,7 +77,7 @@ parse_text(const char *body, char *const *overrides, int noverrides)
     "input." #n ".type = input_register\n"       \
     "input." #n ".address = 0\n"                 \
     "input." #n ".naddress = 1\n"                \
-    "input." #n ".interval = 1000\n"             \
+    "input." #n ".interval_ms = 1000\n"          \
     "input." #n ".channel.max = 1\n"             \
     "input." #n ".channel.1.offset = 0\n"        \
     "input." #n ".channel.1.format = uint_ab\n"  \
@@ -88,7 +88,7 @@ parse_text(const char *body, char *const *overrides, int noverrides)
     "input." #n ".type = input_register\n"       \
     "input." #n ".address = 0\n"                 \
     "input." #n ".naddress = 1\n"                \
-    "input." #n ".interval = 1000\n"             \
+    "input." #n ".interval_ms = 1000\n"          \
     "input." #n ".channel.max = 1\n"             \
     "input." #n ".channel.1.offset = 0\n"        \
     "input." #n ".channel.1.format = uint_ab\n"  \
@@ -220,6 +220,11 @@ test_rules(void)
         CHECK_INT(modbusmq_config_get()->inputs[2].slave, 34, "...module 2 on slave 34");
     }
 
+    // interval_ms takes once as well as milliseconds
+    CHECK_INT(parse_text("input.max = 1\n" FIXED_INPUT(1, "g")
+                         "input.1.interval_ms = once\n", NULL, 0), 0, "interval_ms = once");
+    CHECK_INT(modbusmq_config_get()->inputs[0].interval, MODBUSMQ_INTERVAL_ONCE, "...parses as once");
+
     // mixed: a fixed input first, then a template, %% is a literal %
     CHECK_INT(parse_text("module.count = 2\n"
                          "input.max = 2\n"
@@ -266,7 +271,7 @@ test_rules(void)
         {
             n += snprintf(body + n, sizeof(body) - n,
                           "input.%d.slave = module\ninput.%d.type = input_register\ninput.%d.address = %d\n"
-                          "input.%d.naddress = 9\ninput.%d.interval = 1000\ninput.%d.channel.max = 9\n",
+                          "input.%d.naddress = 9\ninput.%d.interval_ms = 1000\ninput.%d.channel.max = 9\n",
                           i, i, i, i * 0x100, i, i, i);
             for(int c = 1; c <= 9; ++c)
             {

@@ -203,7 +203,7 @@ expect_output "modbusmq_server --version matches the header" "$WANT" "$SERVER" -
 
 # -e substitutes at the line the key appears on
 expect_output "-e overrides a config key" "overridden by -e" \
-    timeout 2 "$BRIDGE" -c "$CONFIG" -v -e modbusmq.frame_timeout=1234
+    timeout 2 "$BRIDGE" -c "$CONFIG" -v -e modbusmq.frame_timeout_ms=1234
 
 # -e naming a key the config lacks warns, and does not stop the run
 expect_output "-e with an unknown key warns" "WARNING.*never appears" \
@@ -248,7 +248,7 @@ input.1.slave       = 1
 input.1.type        = holding_register
 input.1.address     = 0x0200
 input.1.naddress    = 8
-input.1.interval    = 1000
+input.1.interval_ms    = 1000
 input.1.channel.max = 1
 input.1.channel.1.offset = 0
 input.1.channel.1.topic  = t/bad
@@ -288,7 +288,7 @@ input.1.slave       = 1
 input.1.type        = holding_register
 input.1.address     = 0x0200
 input.1.naddress    = 8
-input.1.interval    = 1000
+input.1.interval_ms    = 1000
 input.1.channel.max = 1
 input.1.channel.1.offset = 0
 input.1.channel.1.topic  = t/good
@@ -462,17 +462,17 @@ bad_config "an unknown tier is rejected" "expected fast or deep" \
     "input.query_mode = rounds
 input.1.tier = medium"
 
-bad_config "a negative round_interval is rejected" "round_interval must not be negative" \
+bad_config "a negative round_interval_ms is rejected" "round_interval_ms must not be negative" \
     "input.query_mode = rounds
-input.round_interval = -1"
+input.round_interval_ms = -1"
 
-# the fixture header sets input.1.interval, which a round has no use for
-bad_config "interval in rounds mode warns that it is ignored" "input.1.interval is ignored" \
+# the fixture header sets input.1.interval_ms, which a round has no use for
+bad_config "interval in rounds mode warns that it is ignored" "input.1.interval_ms is ignored" \
     "input.query_mode = rounds"
 
-good_config "rounds, tier and round_interval in their numeric forms are accepted" \
+good_config "rounds, tier and round_interval_ms in their numeric forms are accepted" \
     "input.query_mode = 2
-input.round_interval = 500
+input.round_interval_ms = 500
 input.1.tier = 1"
 
 #

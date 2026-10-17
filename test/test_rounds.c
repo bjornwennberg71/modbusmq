@@ -293,7 +293,7 @@ main(int argc, char **argv)
     printf("config\n");
 
     CHECK_INT(config->query_mode, modbusmq_query_mode_rounds, "input.query_mode = rounds");
-    CHECK_INT(config->round_interval_ms, 0, "input.round_interval = 0");
+    CHECK_INT(config->round_interval_ms, 0, "input.round_interval_ms = 0");
     CHECK_INT(config->inputs[0].tier, modbusmq_tier_fast, "input.1.tier = fast");
     CHECK_INT(config->inputs[1].tier, modbusmq_tier_deep, "input.2.tier = deep");
 
@@ -362,7 +362,7 @@ main(int argc, char **argv)
     //
     // 3. round_interval: rounds 12..15 start at least 150 ms apart
     //
-    printf("round_interval\n");
+    printf("round_interval_ms\n");
     CHECK_INT(modbusmq_set_focus(context, -1), 0, "focus cleared");
     config->round_interval_ms = 150;
     CHECK_INT(pump_until(context, 15), 0, "rounds with an interval ran");

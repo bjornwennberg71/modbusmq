@@ -365,7 +365,7 @@ modbusmq_next_req_id(modbusmq_context_t *context)
 }
 
 #define MODBUSMQ_SLAVE_MISS_MAX        3    // timeouts in a row before a slave counts as unresponsive
-#define MODBUSMQ_SLAVE_RETRY_FIRST_MS  1000 // first probe delay, doubled up to modbusmq.slave_retry_max
+#define MODBUSMQ_SLAVE_RETRY_FIRST_MS  1000 // first probe delay, doubled up to modbusmq.slave_retry_max_ms
 
 static modbusmq_timer_t *
 modbusmq_timer_find(modbusmq_context_t *context, int timer_id)

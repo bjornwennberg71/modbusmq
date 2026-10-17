@@ -56,7 +56,7 @@ input.1.slave       = 39
 input.1.type        = input_register
 input.1.address     = 0x0000
 input.1.naddress    = 4
-input.1.interval    = 2000
+input.1.interval_ms    = 2000
 input.1.channel.max = 1
 
 input.1.channel.1.offset = 0
@@ -80,7 +80,7 @@ meaning where it was unsigned — see step 5.
 
 ## 4. One input block per request
 
-An input is one Modbus read, repeated every `interval` milliseconds. Registers
+An input is one Modbus read, repeated every `interval_ms` milliseconds. Registers
 that are far apart belong in separate blocks; a single block reading a huge span
 to reach two useful registers wastes the bus.
 
@@ -89,7 +89,7 @@ input.N.slave       = 39               # device id
 input.N.type        = input_register   # input_register | holding_register | coil | discrete_input
 input.N.address     = 0x0000           # first register
 input.N.naddress    = 0x1F             # how many
-input.N.interval    = 2000             # ms
+input.N.interval_ms    = 2000             # ms
 input.N.channel.max = 9                # must come before the channel keys
 ```
 
@@ -160,7 +160,7 @@ input.1.channel.1.on_change  = 1
 input.1.channel.1.retain     = 1
 ```
 
-`on_change`, `min_interval` and `max_interval` work on these as they do on a
+`on_change`, `min_interval_ms` and `max_interval_ms` work on these as they do on a
 voltage; `mod`, `mul`, `decimals`, `min_change` and `min_change_rel` do not
 apply and are rejected at parse time rather than ignored. They are read-only —
 a `write.N` entry naming one is refused. See `config/CONFIG.md` for the full
@@ -381,15 +381,15 @@ as alarm bits, publish only when it changes and heartbeat once an hour:
 
 ```
 input.2.on_change    = 1          # whole block: only when the value changes
-input.2.max_interval = 3600000    # ...but say so once an hour regardless
+input.2.max_interval_ms = 3600000    # ...but say so once an hour regardless
 ```
 
 Analog readings take a deadband and a floor on how often they go out:
 
 ```
 input.1.channel.3.min_change   = 0.5     # ignore jitter under half a degree
-input.1.channel.3.min_interval = 5000    # never more often than every 5 s
-input.1.channel.3.max_interval = 60000   # heartbeat once a minute
+input.1.channel.3.min_interval_ms = 5000    # never more often than every 5 s
+input.1.channel.3.max_interval_ms = 60000   # heartbeat once a minute
 ```
 
 The same keys work per channel, per input, or config-wide as `publish.*`. See
@@ -420,7 +420,7 @@ info: factory/line1/sensors/inlet_temperature=21.5
 | `config.version is X, so N channel(s) ... keep the old UNSIGNED meaning` | migrate to `config.version = 2.0` |
 | nothing published, no errors | built without `--enable-mqtt`, or no `mqtt.connect` |
 | `debug: ...=X suppressed (unchanged or too soon)` | rate limiting doing its job; only shown with `-v` |
-| frames lost on RTU | raise `modbusmq.rts_delay`, then `modbusmq.frame_timeout` |
+| frames lost on RTU | raise `modbusmq.rts_delay_us`, then `modbusmq.frame_timeout_ms` |
 
 ---
 
