@@ -20,7 +20,7 @@ extern void modbusmq_logf(int loglevel, const char *format, ...) __attribute__((
 //
 // Route the library's log lines somewhere else, e.g. into the application's
 // own logger. The handler gets the level and the bare message: no timestamp,
-// no level tag, no trailing newline. Messages longer than 1023 bytes are
+// no level tag, no trailing newline. Messages longer than 255 bytes are
 // truncated. NULL restores the default printer (timestamped, errors to
 // stderr, the rest to stdout). Process-wide, like the logger itself.
 //

@@ -841,47 +841,46 @@ void
 modbusmq_frame_debug(modbusmq_context_t *context, modbusmq_frame_t *frame)
 {
     (void)context;
+    // the logger cuts a line at 255 bytes anyway, so a long frame ends early
     char
-        azLine[2000];
-    azLine[0] = 0;
-    if (frame->xmit >= 0)
+        azLine[256];
+    size_t
+        used;
+
+    if (frame->xmit < 0)
     {
-        int nxmit = frame->xmit;
-        if (nxmit > MODBUSMQ_FRAME_MAX)
-        {
-            nxmit = MODBUSMQ_FRAME_MAX;
-        }
-        
-        char *ptr = azLine;
-        if (frame->is_writer)
-        {
-            ptr += sprintf(azLine, "writer: xmit=%d length=%d ", frame->xmit, frame->length);
-        }
-        else
-        {
-            ptr += sprintf(azLine, "reader: xmit=%d length=%d ", frame->xmit, frame->length);
-        }
-        
-        for(int i = 0; i < nxmit; ++i)
-        {
-            if (frame->is_writer)
-            {
-                ptr += sprintf(ptr, "[%.2X]", frame->buf[i]);
-            }
-            else
-            {
-                ptr += sprintf(ptr, "<%.2X>", frame->buf[i]);
-            }
-                
-        }
-        
-        ptr += sprintf(ptr, "\n");
+        modbusmq_logf(MODBUSMQ_LOG_INFO, "xmit = %d\n", frame->xmit);
+        return;
+    }
+
+    int nxmit = frame->xmit;
+    if (nxmit > MODBUSMQ_FRAME_MAX)
+    {
+        nxmit = MODBUSMQ_FRAME_MAX;
+    }
+
+    if (frame->is_writer)
+    {
+        used = snprintf(azLine, sizeof(azLine), "writer: xmit=%d length=%d ", frame->xmit, frame->length);
     }
     else
     {
-        sprintf(azLine, "xmit = %d\n", frame->xmit);
+        used = snprintf(azLine, sizeof(azLine), "reader: xmit=%d length=%d ", frame->xmit, frame->length);
     }
-    modbusmq_logf(MODBUSMQ_LOG_INFO, "%s", azLine);
+
+    for(int i = 0; i < nxmit && used < sizeof(azLine); ++i)
+    {
+        if (frame->is_writer)
+        {
+            used += snprintf(azLine + used, sizeof(azLine) - used, "[%.2X]", frame->buf[i]);
+        }
+        else
+        {
+            used += snprintf(azLine + used, sizeof(azLine) - used, "<%.2X>", frame->buf[i]);
+        }
+    }
+
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "%s\n", azLine);
 }
 
 /**
