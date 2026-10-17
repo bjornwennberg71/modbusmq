@@ -94,7 +94,12 @@ RTU connect string format: `rtu:///device:baudrate:stopbits:databits:parity`
 ```
 modbusmq.frame_timeout = 1000    # milliseconds — give up waiting for a response after this
 modbusmq.rts_delay     = 10000   # microseconds — pause before transmitting (RTU only)
+modbusmq.slave_retry_max = 300000 # milliseconds — backoff cap for a slave that stopped answering, 0 = off
 ```
+
+`slave_retry_max`: after 3 timeouts in a row a slave is marked unresponsive and its inputs are skipped, so one dead device no longer costs every poll cycle a `frame_timeout`. It is probed with one read after 1 s, then 2 s, 4 s and so on up to `slave_retry_max`, and read normally again from its first answer. An exception reply counts as an answer.
+
+`input.N.interval = once` reads the input at startup, after every reconnect and when its slave answers again after being unresponsive, and not otherwise. Meant for serial numbers, firmware versions and ratings. A once read without a valid reply is retried every 10 s. In rounds mode it is read every round until it has answered. Publish it with `retain = 1` so a late subscriber still gets it.
 
 `frame_timeout` defaults to 1000 ms. For slow devices or debugging, increase it.
 
@@ -153,7 +158,7 @@ input.N.type           = input_register   # see the table below
 input.N.address        = 0x0FFF           # start register address (hex or decimal)
 input.N.address_offset = 0        # registers/coils to skip at the start of the block, see below
 input.N.naddress       = 0x27             # number of registers to read
-input.N.interval       = 1000             # polling interval in milliseconds (ignored in rounds mode)
+input.N.interval       = 1000             # polling interval in milliseconds (ignored in rounds mode), or once
 input.N.tier           = fast             # rounds mode only: fast (or 0, default) or deep (or 1)
 input.N.channel.max    = 13               # number of channels — must come before channel keys
 

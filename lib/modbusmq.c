@@ -364,6 +364,130 @@ modbusmq_next_req_id(modbusmq_context_t *context)
     return context->req_id_next;
 }
 
+#define MODBUSMQ_SLAVE_MISS_MAX        3    // timeouts in a row before a slave counts as unresponsive
+#define MODBUSMQ_SLAVE_RETRY_FIRST_MS  1000 // first probe delay, doubled up to modbusmq.slave_retry_max
+
+static modbusmq_timer_t *
+modbusmq_timer_find(modbusmq_context_t *context, int timer_id)
+{
+    for(modbusmq_timer_t *timer = context->timer_head; timer; timer = timer->next)
+    {
+        if (timer->timer_id == timer_id)
+        {
+            return timer;
+        }
+    }
+    return NULL;
+}
+
+//
+// A subscription poll of timer_id got an answer (answered = 1, an exception
+// counts: the slave is alive) or timed out (answered = 0). Updates the backoff
+// of every timer of that slave.
+//
+static void
+modbusmq_slave_update(modbusmq_context_t *context, int timer_id, int answered)
+{
+    modbusmq_timer_t
+        *timer = modbusmq_timer_find(context, timer_id);
+    int
+        retry_max = context->config ? context->config->modbusmq_slave_retry_max_ms : 0;
+
+    if (!timer)
+    {
+        return;
+    }
+
+    int
+        slave        = timer->slave,
+        unresponsive = timer->unresponsive,
+        misses       = timer->misses;
+    uint32_t
+        retry_ms     = timer->retry_ms;
+    millitime_t
+        now          = millitime();
+
+    if (answered)
+    {
+        if (unresponsive)
+        {
+            modbusmq_logf(MODBUSMQ_LOG_INFO, "slave %d answers again, reading it normally\n", slave);
+        }
+        misses       = 0;
+        unresponsive = 0;
+        retry_ms     = 0;
+    }
+    else if (retry_max <= 0)
+    {
+        return;
+    }
+    else if (!unresponsive)
+    {
+        if (++misses < MODBUSMQ_SLAVE_MISS_MAX)
+        {
+            for(modbusmq_timer_t *t = context->timer_head; t; t = t->next)
+            {
+                if (t->slave == slave)
+                {
+                    t->misses = misses;
+                }
+            }
+            return;
+        }
+        unresponsive = 1;
+        retry_ms     = MODBUSMQ_MIN(MODBUSMQ_SLAVE_RETRY_FIRST_MS, (uint32_t)retry_max);
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "slave %d unresponsive after %d timeouts, probing it from every %u ms up to %d ms\n",
+                      slave, misses, (unsigned)retry_ms, retry_max);
+    }
+    else
+    {
+        // a failed probe
+        retry_ms = MODBUSMQ_MIN(retry_ms * 2, (uint32_t)retry_max);
+    }
+
+    for(modbusmq_timer_t *t = context->timer_head; t; t = t->next)
+    {
+        if (t->slave != slave)
+        {
+            continue;
+        }
+        // back from unresponsive: the device may have been swapped, read its once values again
+        if (t->unresponsive && !unresponsive && t->is_once)
+        {
+            t->timer_next_time = now;
+        }
+        t->misses       = misses;
+        t->unresponsive = unresponsive;
+        t->retry_ms     = retry_ms;
+        t->retry_at     = now + retry_ms;
+    }
+}
+
+//
+// May this timer be posted now? An unresponsive slave gets one probe per
+// retry_ms; the probe holds back the slave's other timers until it resolves.
+//
+static int
+modbusmq_slave_gate(modbusmq_context_t *context, modbusmq_timer_t *timer, millitime_t now)
+{
+    if (!timer->unresponsive)
+    {
+        return 1;
+    }
+    if (now < timer->retry_at)
+    {
+        return 0;
+    }
+    for(modbusmq_timer_t *t = context->timer_head; t; t = t->next)
+    {
+        if (t->slave == timer->slave)
+        {
+            t->retry_at = now + timer->retry_ms;
+        }
+    }
+    return 1;
+}
+
 /**
  *
  * @brief report a failed request to the caller, if it asked to hear about them
@@ -375,6 +499,11 @@ modbusmq_next_req_id(modbusmq_context_t *context)
 static void
 modbusmq_report_error(modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
 {
+    if (msg->msg_id > 0 && (error == MODBUSMQ_ERR_TIMEOUT || error == MODBUSMQ_ERR_EXCEPTION))
+    {
+        modbusmq_slave_update(context, msg->msg_id, error == MODBUSMQ_ERR_EXCEPTION);
+    }
+
     if (!context->error_cb)
     {
         return;
@@ -518,6 +647,15 @@ modbusmq_reset_queue(modbusmq_context_t *context)
     }
 
     context->msg_wrapper_head = NULL;
+
+    // the device may have been swapped or reflashed: read the once values again
+    for(modbusmq_timer_t *timer = context->timer_head; timer; timer = timer->next)
+    {
+        if (timer->is_once)
+        {
+            timer->timer_next_time = millitime();
+        }
+    }
 }
 
 /**
@@ -3635,7 +3773,7 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
     // a round decides when a rounds-mode subscription is read, not interval
     if (!rounds)
     {
-        assert(interval > 0);
+        assert(interval > 0 || interval == MODBUSMQ_INTERVAL_ONCE);
     }
     
     modbusmq_timer_t
@@ -3653,7 +3791,14 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
     timer->timer_interval  = interval;
     timer->orig_interval   = interval;
     timer->timer_next_time = timer->timer_start;
-    
+
+    if (interval == MODBUSMQ_INTERVAL_ONCE)
+    {
+        timer->is_once        = 1;
+        timer->timer_interval = MODBUSMQ_ONCE_RETRY_MS;
+        timer->orig_interval  = 0; // takes no share of a series cycle
+    }
+
     memcpy(&timer->msg, msg, sizeof(modbusmq_msg_t));
 
     timer->slave = modbusmq_frame_slave(context, &msg->frame[0]);
@@ -3678,6 +3823,12 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
 
     if (!context->timer_head)
     {
+        context->timer_head = timer;
+    }
+    else if (timer->is_once && !rounds)
+    {
+        // outside the parallel/series arithmetic below; first in line at start
+        timer->next         = context->timer_head;
         context->timer_head = timer;
     }
     else if (rounds)
@@ -3790,7 +3941,10 @@ modbusmq_subscribe(modbusmq_context_t *context, modbusmq_msg_t *msg, int interva
             elem = context->timer_head;
             while(elem)
             {
-                elem->timer_interval = total_interval_ms;
+                if (!elem->is_once)
+                {
+                    elem->timer_interval = total_interval_ms;
+                }
                 elem = elem->next;
             }
             
@@ -3828,7 +3982,7 @@ modbusmq_timer_debug_print(modbusmq_context_t *context)
     while(elem)
     {
         // a rounds-mode subscription has no interval of its own
-        assert(elem->orig_interval > 0 ||
+        assert(elem->orig_interval > 0 || elem->is_once ||
                (context->config && context->config->query_mode == modbusmq_query_mode_rounds));
 
         if (0)
@@ -4395,6 +4549,16 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
         modbusmq_config_t
             *modbusmq_config = modbusmq_config_get();
 
+        modbusmq_slave_update(context, wrapper->msg.msg_id, 1);
+
+        // a valid reply ends a once read until the next reset
+        modbusmq_timer_t
+            *timer = modbusmq_timer_find(context, wrapper->msg.msg_id);
+        if (timer && timer->is_once)
+        {
+            timer->timer_next_time = UINT64_MAX;
+        }
+
         //
         // Find the input block this response answers. Slave and address alone
         // do not identify it: coils, discrete inputs, holding and input
@@ -4505,6 +4669,11 @@ modbusmq_round_next_deep_slave(modbusmq_context_t *context)
         {
             continue;
         }
+        // an unresponsive slave only gets the deep turn when its probe is due
+        if (elem->unresponsive && millitime() < elem->retry_at)
+        {
+            continue;
+        }
         seen[elem->slave] = 1;
         order[norder++]   = elem->slave;
     }
@@ -4541,6 +4710,14 @@ modbusmq_round_post(modbusmq_context_t *context, int tier, int slave)
     for(modbusmq_timer_t *elem = context->timer_head; elem; elem = elem->next)
     {
         if (elem->tier != tier || (slave >= 0 && elem->slave != slave))
+        {
+            continue;
+        }
+        if (elem->is_once && elem->timer_next_time == UINT64_MAX)
+        {
+            continue; // answered since the last reset
+        }
+        if (!modbusmq_slave_gate(context, elem, millitime()))
         {
             continue;
         }
@@ -4829,14 +5006,11 @@ modbusmq_loop_prepare_subscription(modbusmq_context_t *context, millitime_t *sle
                 // only add new subscription if there are no subscriptions for this timer_id
                 if (!w1 || w1->msg.msg_id != elem->timer_id)
                 {
-                    elem->msg.msg_id = elem->timer_id;
-                
-                    //
-                    // post a request
-                    //
-                    modbusmq_post_internal(context, &elem->msg, MODBUSMQ_MSG_SUBSCRIBE);
-
-
+                    if (modbusmq_slave_gate(context, elem, time_now))
+                    {
+                        elem->msg.msg_id = elem->timer_id;
+                        modbusmq_post_internal(context, &elem->msg, MODBUSMQ_MSG_SUBSCRIBE);
+                    }
                     elem->timer_next_time += elem->timer_interval;
                 }
                 

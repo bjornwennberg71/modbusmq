@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <string.h>
 #include <strings.h>  // strcasecmp
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h> // debug
 #include <assert.h> // debug
@@ -99,6 +100,29 @@ config_boolean(const char *value)
         return 0;
     }
     return -1;
+}
+
+// milliseconds into *out_value: 0. "once": > 0, *out_value untouched. < 0 when it is neither
+static int
+config_read_interval(int *out_value, const char *input)
+{
+    if (strcasecmp(input, "once") == 0)
+    {
+        return 1;
+    }
+
+    char
+        *end = NULL;
+    double
+        value = strtod(input, &end);
+
+    // the negated range test also rejects NaN
+    if (end == input || *end != 0 || !(value >= 0 && value <= INT_MAX))
+    {
+        return -1;
+    }
+    *out_value = (int)value;
+    return 0;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -1452,6 +1476,7 @@ config_parse_stream(FILE *fp, const char *name)
 
     modbusmq_config->modbusmq_rts_delay_us    = 10000; // default 10 ms wait before send
     modbusmq_config->modbusmq_frame_timeout_ms = 1000; // maximum 1000 ms waiting for a frame before giving up
+    modbusmq_config->modbusmq_slave_retry_max_ms = 300000;
     modbusmq_config->offset_size = 1; // default 1 byte offset calculation
     modbusmq_config->mqtt_retain = 1; // what publishing has always done
     modbusmq_config->mqtt_qos    = 0;
@@ -1546,6 +1571,17 @@ config_parse_stream(FILE *fp, const char *name)
         else if (strcmp(key, "modbusmq.frame_timeout") == 0)
         {
             modbusmq_config->modbusmq_frame_timeout_ms = strtol(value, NULL, 0);
+        }
+        else if (strcmp(key, "modbusmq.slave_retry_max") == 0)
+        {
+            modbusmq_config->modbusmq_slave_retry_max_ms = strtol(value, NULL, 0);
+            if (modbusmq_config->modbusmq_slave_retry_max_ms < 0)
+            {
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
         }
         else if (strcmp(key, "input.offset_size") == 0)
         {
@@ -1701,7 +1737,19 @@ config_parse_stream(FILE *fp, const char *name)
             }
             else if (strcmp(input_key, "interval") == 0)
             {
-                input->interval = strtod(value, NULL);
+                int
+                    rc = config_read_interval(&input->interval, value);
+                if (rc < 0)
+                {
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected milliseconds or once\n", line_num, key, value);
+                    fclose(fp);
+                    free(line);
+                    return -1;
+                }
+                if (rc > 0)
+                {
+                    input->interval = MODBUSMQ_INTERVAL_ONCE;
+                }
             }
             else if (strcmp(input_key, "tier") == 0)
             {

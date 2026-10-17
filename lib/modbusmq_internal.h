@@ -62,7 +62,14 @@ typedef struct modbusmq_timer_t
                  // so a round can be put together without the config
     int          tier;
     int          slave;
-    
+    uint8_t      is_once; // MODBUSMQ_INTERVAL_ONCE: stops after the first valid reply
+
+                 // per-slave backoff, kept identical in every timer of the slave
+    uint8_t      misses;       // timeouts in a row
+    uint8_t      unresponsive; // skipped except for one probe every retry_ms
+    uint32_t     retry_ms;
+    millitime_t  retry_at;
+
     modbusmq_msg_t msg;
 
     struct modbusmq_timer_t *next;

@@ -197,7 +197,9 @@ extern void modbusmq_frame_debug(                 struct modbusmq_context_t *con
     
 // post a message; queued ahead of waiting subscription polls, in post order
 extern int  modbusmq_post(                struct modbusmq_context_t *context, modbusmq_msg_t *msg);
-// subscribe to message every interval in ms
+// subscribe to message every interval in ms, or MODBUSMQ_INTERVAL_ONCE
+#define MODBUSMQ_INTERVAL_ONCE   (-1)    // read at start and after each reset/reconnect, then never again
+#define MODBUSMQ_ONCE_RETRY_MS   10000   // a once read that got no valid reply is retried this often
 extern int  modbusmq_subscribe(           struct modbusmq_context_t *context, modbusmq_msg_t *msg, int interval_ms);
 //
 // input.query_mode = rounds only. Every round then also reads the deep inputs

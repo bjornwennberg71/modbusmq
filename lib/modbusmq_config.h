@@ -287,7 +287,7 @@ typedef struct modbusmq_input_t
     int                 address;
     int                 address_offset;
     int                 naddress;
-    int                 interval;
+    int                 interval; // ms, or MODBUSMQ_INTERVAL_ONCE
     int                 tier;      // modbusmq_tier_e, rounds mode only
                                    // Module index 0..module.count-1 when this
                                    // input was expanded from a slave = module
@@ -443,6 +443,7 @@ typedef struct modbusmq_config_t
     int                 modbusmq_databit;
     int                 modbusmq_rts_delay_us;
     int                 modbusmq_frame_timeout_ms;
+    int                 modbusmq_slave_retry_max_ms; // backoff cap for an unresponsive slave, 0 = off
     int                 modbusmq_slave;
     
     int                 input_max;
