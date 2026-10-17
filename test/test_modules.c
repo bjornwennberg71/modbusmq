@@ -220,6 +220,20 @@ test_rules(void)
         CHECK_INT(modbusmq_config_get()->inputs[2].slave, 34, "...module 2 on slave 34");
     }
 
+    // frame_delay_ms defaults by transport, and an explicit value wins
+    {
+        char
+            *rtu[]  = { "modbusmq.connect=rtu:///dev/null:9600:1:8:N" };
+
+        CHECK_INT(parse_text("input.max = 1\n" FIXED_INPUT(1, "g"), NULL, 0), 0, "frame_delay_ms on tcp");
+        CHECK_INT(modbusmq_config_get()->modbusmq_frame_delay_ms, 0, "...defaults to 0");
+        CHECK_INT(parse_text("input.max = 1\n" FIXED_INPUT(1, "g"), rtu, 1), 0, "frame_delay_ms on rtu");
+        CHECK_INT(modbusmq_config_get()->modbusmq_frame_delay_ms, 50, "...defaults to 50");
+        CHECK_INT(parse_text("modbusmq.frame_delay_ms = 0\n"
+                             "input.max = 1\n" FIXED_INPUT(1, "g"), rtu, 1), 0, "frame_delay_ms = 0 on rtu");
+        CHECK_INT(modbusmq_config_get()->modbusmq_frame_delay_ms, 0, "...stays off");
+    }
+
     // interval_ms takes once as well as milliseconds
     CHECK_INT(parse_text("input.max = 1\n" FIXED_INPUT(1, "g")
                          "input.1.interval_ms = once\n", NULL, 0), 0, "interval_ms = once");

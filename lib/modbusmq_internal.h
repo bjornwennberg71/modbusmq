@@ -141,7 +141,7 @@ typedef struct modbusmq_context_t
     uint64_t              rts_delay_us;
     
     millitime_t           last_write_ms; // timestamp last write
-    millitime_t           last_read_ms;  // timestamp last read
+    millitime_t           last_read_ms;  // timestamp last read, or last timeout; modbusmq.frame_delay_ms counts from it
     millitime_t           frame_timeout_ms; // max time to wait for a request/response per frame
     
     modbusmq_msg_wrapper_t *msg_wrapper_head; // queue of requests

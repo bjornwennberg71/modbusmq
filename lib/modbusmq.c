@@ -488,6 +488,24 @@ modbusmq_slave_gate(modbusmq_context_t *context, modbusmq_timer_t *timer, millit
     return 1;
 }
 
+//
+// ms left before the next request may go out. modbusmq.frame_delay_ms keeps the
+// bus quiet after an answer or timeout: a slave still releasing its RS485
+// driver misses a request sent straight after (krsand, 2026-10-17).
+//
+static millitime_t
+modbusmq_frame_delay_left(modbusmq_context_t *context, millitime_t now)
+{
+    int
+        delay = context->config ? context->config->modbusmq_frame_delay_ms : 0;
+
+    if (delay <= 0 || now >= context->last_read_ms + (millitime_t)delay)
+    {
+        return 0;
+    }
+    return context->last_read_ms + (millitime_t)delay - now;
+}
+
 /**
  *
  * @brief report a failed request to the caller, if it asked to hear about them
@@ -1093,6 +1111,32 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
     return 0;
 }
 
+//
+// modbusmq.na_value: does this 16-bit integer register hold the device's "no
+// value" marker? Checked on the raw register, before add/mod/mul. Bit, 32-bit,
+// float and text formats never match.
+//
+static int
+modbusmq_channel_is_na(const modbusmq_config_t *config, const modbusmq_channel_t *channel, const uint8_t *data)
+{
+    if (!config || !config->has_na_value)
+    {
+        return 0;
+    }
+
+    switch(channel->format)
+    {
+    case modbusmq_data_format_ab:
+    case modbusmq_data_format_int16_ab:
+        return modbusmq_read_int16_ab(data) == config->modbusmq_na_value;
+    case modbusmq_data_format_ba:
+    case modbusmq_data_format_int16_ba:
+        return modbusmq_read_int16_ba(data) == config->modbusmq_na_value;
+    default:
+        return 0;
+    }
+}
+
 /**
  *
  * @brief converts data from msg using input and channel to get a float value
@@ -1104,8 +1148,8 @@ modbusmq_channel_in_range(struct modbusmq_context_t *context, modbusmq_msg_t *ms
  * @param input  : input definition
  * @param channel: channel definition
  *
- * @return float value
- */ 
+ * @return float value, NaN when the register holds modbusmq.na_value
+ */
 float
 modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const modbusmq_input_t *input, const modbusmq_channel_t *channel)
 {
@@ -1137,6 +1181,10 @@ modbusmq_read_channel(modbusmq_context_t *context, modbusmq_msg_t *msg, const mo
             bit = channel->offset - input->address_offset;
 
         f = (data[bit / 8] >> (bit % 8)) & 0x01;
+    }
+    else if (modbusmq_channel_is_na(config, channel, data + offset))
+    {
+        return NAN;
     }
     else
     {
@@ -1765,6 +1813,12 @@ modbusmq_channel_format_value(const modbusmq_input_t *input, const modbusmq_chan
     {
         errno = EINVAL;
         return -1;
+    }
+
+    // modbusmq.na_value: the device said it has no value
+    if (isnan(value))
+    {
+        return snprintf(buf, len, "null");
     }
 
     int
@@ -2764,11 +2818,11 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
         
         if (modbusmq_debug)
         {
-            printf("Device=%s\n", connect->device);
-            printf("Baudrate=%d\n", connect->baudrate);
-            printf("Stopbit=%d\n", connect->stopbit);
-            printf("Databits=%d\n", connect->databits);
-            printf("Parity=%c\n", connect->parity);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "Device=%s\n", connect->device);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "Baudrate=%d\n", connect->baudrate);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "Stopbit=%d\n", connect->stopbit);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "Databits=%d\n", connect->databits);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "Parity=%c\n", connect->parity);
         }
         
         if (matched == 5)
@@ -2785,8 +2839,8 @@ modbusmq_parse_connect_string(const char *input_string, struct modbusmq_connect_
 
         if (modbusmq_debug)
         {
-            printf("mqtt device = %s\n", connect->device);
-            printf("mqtt port   = %d\n", connect->port);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "mqtt device = %s\n", connect->device);
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "mqtt port   = %d\n", connect->port);
         }
 
         //
@@ -3987,7 +4041,7 @@ modbusmq_timer_debug_print(modbusmq_context_t *context)
 
         if (0)
         {
-            printf("timer%d.id=%d start=%d orig_interval=%d timer_interval=%d\n",
+            modbusmq_logf(MODBUSMQ_LOG_DEBUG, "timer%d.id=%d start=%d orig_interval=%d timer_interval=%d\n",
                    nElem,
                    elem->timer_id,
                    (int)(elem->timer_next_time - head->timer_next_time),
@@ -4225,6 +4279,12 @@ modbusmq_handle_write_read(modbusmq_context_t *context, modbusmq_msg_t *msg, int
         //printf("need to write\n");
         if (revents & POLLOUT)
         {
+            // a caller may poll POLLOUT on its own; the gap holds regardless
+            if (writer->xmit == 0 && modbusmq_frame_delay_left(context, millitime()) > 0)
+            {
+                return 0;
+            }
+
             //
             // About to put a fresh request on the wire: make sure nothing is
             // left over from a frame we gave up on, or its bytes become the
@@ -5118,6 +5178,7 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
             context->tx++;
 
             context->last_write_ms = 0;
+            context->last_read_ms  = time_now; // a late answer may still be on the bus: gap from here
 
             //
             // The response may simply be late rather than lost. Drain now, and
@@ -5188,6 +5249,21 @@ modbusmq_loop_prepare(modbusmq_context_t *context, millitime_t *sleep_time, int1
     // must write request first
     if (modbusmq_frame_incomplete(context, writer))
     {
+        if (writer->xmit == 0)
+        {
+            millitime_t
+                delay_left = modbusmq_frame_delay_left(context, millitime());
+
+            // still in the quiet gap: sleep it out instead of asking for POLLOUT
+            if (delay_left > 0)
+            {
+                if (delay_left < *sleep_time)
+                {
+                    *sleep_time = delay_left;
+                }
+                return context->fd;
+            }
+        }
         *events |= POLLOUT;
         return context->fd;
     }
@@ -5281,15 +5357,29 @@ modbusmq_send(modbusmq_context_t *context, modbusmq_msg_t *msg, int mswait)
         pollfds[0].events |= POLLERR | POLLHUP;
         
         
+        millitime_t
+            delay_left = 0;
+
         if (modbusmq_frame_incomplete(context, writer))
         {
-            pollfds[0].events |= POLLOUT;
+            if (writer->xmit == 0)
+            {
+                delay_left = modbusmq_frame_delay_left(context, time_now);
+            }
+            if (delay_left > 0)
+            {
+                millisleep = MODBUSMQ_MIN(millisleep, delay_left);
+            }
+            else
+            {
+                pollfds[0].events |= POLLOUT;
+            }
         }
         else if (modbusmq_frame_incomplete(context, reader))
         {
             pollfds[0].events |= POLLIN;
         }
-        
+
         nfds++;
 
         int rc = poll(pollfds, nfds, millisleep);

@@ -274,7 +274,7 @@ typedef struct modbusmq_channel_t
     uint8_t                 has_min_interval:1;
     uint8_t                 has_max_interval:1;
     uint8_t                 published:1;
-    uint8_t                 na:1;
+    uint8_t                 reserved:1;
 } modbusmq_channel_t;
     
 //
@@ -308,11 +308,12 @@ typedef struct modbusmq_input_t
     float               min_change_rel;
     int                 min_interval;
     int                 max_interval;
-    uint8_t             has_on_change;
-    uint8_t             has_min_change;
-    uint8_t             has_min_change_rel;
-    uint8_t             has_min_interval;
-    uint8_t             has_max_interval;
+    uint8_t             has_on_change:1;
+    uint8_t             has_min_change:1;
+    uint8_t             has_min_change_rel:1;
+    uint8_t             has_min_interval:1;
+    uint8_t             has_max_interval:1;
+    uint8_t             reserved:3;
 } modbusmq_input_t;
 
 //
@@ -345,7 +346,8 @@ typedef struct modbusmq_write_channel_t
                                  // in the config, and publishing anything at
                                  // all to the topic sends them.
     double              value;
-    uint8_t             has_value;
+    uint8_t             has_value:1;
+    uint8_t             reserved:7;
 } modbusmq_write_channel_t;
 
 //
@@ -365,13 +367,11 @@ typedef struct modbusmq_write_t
 {
     char               *name;    // for the log; optional
     int                 slave;
-    uint8_t             has_slave;
     int                 module;  // as modbusmq_input_t.module
 
     int                 type;     // modbusmq_type_coil or _HoldingRegister
     int                 function; // modbusmq_write_function_e
     int                 address;
-    uint8_t             has_address;
 
     int                 format;   // register writes only
     int                 length;   // bytes, derived from format
@@ -390,8 +390,6 @@ typedef struct modbusmq_write_t
                                   // takes it as a coil or as a register value.
     int                 on_value;
     int                 off_value;
-    uint8_t             has_on_value;
-    uint8_t             has_off_value;
 
     char               *topic;    // subscribed, never published
 
@@ -404,17 +402,8 @@ typedef struct modbusmq_write_t
                                   // unchanged: format/add/mod/mul on the entry
                                   // itself, one value per message.
     int                 naddress;
-    uint8_t             has_naddress;
     int                 channel_max;
     modbusmq_write_channel_t *channels;
-
-                                  // Every channel carries a value, so the
-                                  // block can be written from the config
-                                  // alone. Worked out once by the validator:
-                                  // the runtime should not have to walk the
-                                  // channels to find out whether a trigger
-                                  // payload is answerable.
-    uint8_t             has_defaults;
 
                                   // Publish an ack or a nack for this write.
                                   // Unset takes mqtt.ack, which is off — an
@@ -423,8 +412,23 @@ typedef struct modbusmq_write_t
                                   // write topic with "/ack" appended, after
                                   // mqtt.topic_prefix has been applied.
     int                 ack;
-    uint8_t             has_ack;
     char               *ack_topic;
+
+                                  // set when the key is in the config, packed into one byte
+    uint8_t             has_slave:1;
+    uint8_t             has_address:1;
+    uint8_t             has_on_value:1;
+    uint8_t             has_off_value:1;
+    uint8_t             has_naddress:1;
+                                  // Every channel carries a value, so the
+                                  // block can be written from the config
+                                  // alone. Worked out once by the validator:
+                                  // the runtime should not have to walk the
+                                  // channels to find out whether a trigger
+                                  // payload is answerable.
+    uint8_t             has_defaults:1;
+    uint8_t             has_ack:1;
+    uint8_t             reserved:1;
 } modbusmq_write_t;
     
 
@@ -444,6 +448,8 @@ typedef struct modbusmq_config_t
     int                 modbusmq_rts_delay_us;
     int                 modbusmq_frame_timeout_ms;
     int                 modbusmq_slave_retry_max_ms; // backoff cap for an unresponsive slave, 0 = off
+    uint16_t            modbusmq_na_value;           // raw 16-bit "no value" marker (Shoto: 0xFFFF), read as NaN
+    int                 modbusmq_frame_delay_ms;     // quiet bus time after an answer or timeout before the next request, 0 = off; default 50 on rtu, 0 on tcp
     int                 modbusmq_slave;
     
     int                 input_max;
@@ -485,11 +491,13 @@ typedef struct modbusmq_config_t
     float               publish_min_change_rel;
     int                 publish_min_interval;
     int                 publish_max_interval;
-    uint8_t             has_publish_on_change;
-    uint8_t             has_publish_min_change;
-    uint8_t             has_publish_min_change_rel;
-    uint8_t             has_publish_min_interval;
-    uint8_t             has_publish_max_interval;
+    uint8_t             has_publish_on_change:1;
+    uint8_t             has_publish_min_change:1;
+    uint8_t             has_publish_min_change_rel:1;
+    uint8_t             has_publish_min_interval:1;
+    uint8_t             has_publish_max_interval:1;
+    uint8_t             has_na_value:1;              // modbusmq.na_value is in the config
+    uint8_t             reserved:2;
 } modbusmq_config_t;
 
     

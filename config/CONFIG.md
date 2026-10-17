@@ -89,15 +89,26 @@ RTU connect string format: `rtu:///device:baudrate:stopbits:databits:parity`
 | databits   | `7` or `8`                    |
 | parity     | `N` (none), `E` (even), `O` (odd) |
 
+### No-value marker
+
+```
+modbusmq.na_value = 0xFFFF   # raw register value meaning "no value"; absent = off
+```
+
+Some devices send a fixed raw value for "not available" (Shoto: 0xFFFF in any register). Scaled, it looks real: 655.35 V. With `na_value` set, a 16-bit `int_*`/`uint_*` channel whose raw register equals it reads as NaN and publishes `null`, checked before `add`/`mod`/`mul`. Bit, 32-bit, float and text formats are never matched. One global setting, no per-channel override. On a signed channel 0xFFFF is also a legitimate raw −1, which then publishes as `null` too.
+
 ### Timing
 
 ```
 modbusmq.frame_timeout_ms = 1000    # milliseconds — give up waiting for a response after this
 modbusmq.rts_delay_us     = 10000   # microseconds — pause before transmitting (RTU only)
 modbusmq.slave_retry_max_ms = 300000 # milliseconds — backoff cap for a slave that stopped answering, 0 = off
+modbusmq.frame_delay_ms   = 50      # milliseconds — quiet bus after an answer or timeout before the next request; default 50 on RTU, 0 on TCP, 0 = off
 ```
 
-Since 2.5.3 every time key carries its unit: `frame_timeout_ms`, `rts_delay_us`, `slave_retry_max_ms`, and `interval_ms`, `round_interval_ms`, `min_interval_ms`, `max_interval_ms` wherever they appear. There is no alias: an old name is logged as `Unknown config` and ignored.
+Since 2.5.3 every time key carries its unit: `frame_timeout_ms`, `rts_delay_us`, `slave_retry_max_ms`, `frame_delay_ms`, and `interval_ms`, `round_interval_ms`, `min_interval_ms`, `max_interval_ms` wherever they appear. There is no alias: an old name is logged as `Unknown config` and ignored.
+
+`frame_delay_ms`: on a multi-drop RS-485 bus a slave can still be releasing its driver when the next request goes out, and the slave addressed by that request misses it. That shows up as timeouts on the request that follows another slave's answer. Unlike `rts_delay_us`, the gap does not block: the event loop sleeps it out and stays free for MQTT. A sweep on four Shoto modules at 9600 baud needed 30 ms with `rts_delay_us = 1000`; the RTU default of 50 ms leaves margin; set it to 0 for the old back-to-back behaviour. Keep it well below `frame_timeout_ms`, since a request waiting out the gap counts toward its not-sent timeout.
 
 `slave_retry_max_ms`: after 3 timeouts in a row a slave is marked unresponsive and its inputs are skipped, so one dead device no longer costs every poll cycle a `frame_timeout_ms`. It is probed with one read after 1 s, then 2 s, 4 s and so on up to `slave_retry_max_ms`, and read normally again from its first answer. An exception reply counts as an answer.
 

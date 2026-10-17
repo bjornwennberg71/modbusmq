@@ -259,6 +259,65 @@ main(int argc, char **argv)
     }
 
     //
+    // modbusmq.frame_delay_ms: no request goes out within the gap after an answer,
+    // and loop_prepare sleeps out what is left of it instead of asking for POLLOUT
+    //
+    printf("frame delay\n");
+    {
+        config->modbusmq_frame_delay_ms = 50;
+
+        modbusmq_msg_t
+            gap[2];
+        memset(gap, 0, sizeof(gap));
+
+        for(int i = 0; i < 2; ++i)
+        {
+            modbusmq_set_slave(context, input->slave);
+            modbusmq_frame_read_input_registers(context, &gap[i].frame[0], input->address, input->naddress);
+            CHECK_INT(modbusmq_post(context, &gap[i]), 0, "gap post accepted");
+        }
+
+        int
+            first_calls = message_calls + 1,
+            prepare_checked = 0;
+        millitime_t
+            first_done = 0,
+            deadline = millitime() + 1000;
+
+        while(message_calls < first_calls + 1 && millitime() < deadline)
+        {
+            struct pollfd
+                pfd;
+            millitime_t
+                millisleep = 500;
+
+            memset(&pfd, 0, sizeof(pfd));
+            pfd.fd = modbusmq_loop_prepare(context, &millisleep, &pfd.events);
+
+            if (first_done && !prepare_checked)
+            {
+                CHECK(!(pfd.events & POLLOUT), "no POLLOUT inside the gap");
+                CHECK(millisleep > 0 && millisleep <= 50, "loop_prepare sleeps out the gap");
+                prepare_checked = 1;
+            }
+
+            poll(&pfd, 1, millisleep);
+            modbusmq_loop_write_read(context, pfd.revents);
+
+            if (!first_done && message_calls >= first_calls)
+            {
+                first_done = millitime();
+            }
+        }
+
+        CHECK_INT(message_calls, first_calls + 1, "both gap posts answered");
+        CHECK(prepare_checked, "loop_prepare was checked inside the gap");
+        CHECK(millitime() - first_done >= 50, "second answer came no sooner than the gap");
+
+        config->modbusmq_frame_delay_ms = 0;
+    }
+
+    //
     // a closed connection is reported, not hidden
     //
     printf("teardown\n");

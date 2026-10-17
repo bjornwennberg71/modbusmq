@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 //
 // what each topic must decode to, after scaling
@@ -129,6 +130,49 @@ build_request(struct modbusmq_context_t *context, modbusmq_msg_t *msg, modbusmq_
     }
 
     return -1;
+}
+
+//
+// modbusmq.na_value: a 16-bit register holding the marker reads as NaN and
+// prints "null", judged on the raw value before scaling. Pokes the bytes of
+// input 1's response, whose t/flags register the server sends as 0xFFFF.
+//
+static void
+test_na_value(struct modbusmq_context_t *context, modbusmq_msg_t *msg, modbusmq_input_t *input)
+{
+    printf("na_value\n");
+
+    modbusmq_config_t
+        *config = modbusmq_config_get();
+    modbusmq_channel_t
+        flags   = input->channels[4], // uint_ab at 0x0C
+        current = input->channels[1]; // int_ab at 0x02, raw -50 = 0xFFCE
+    uint8_t
+        *data   = modbusmq_frame_data(context, &msg->frame[1]);
+    char
+        text[64];
+
+    flags.mod = -100;
+
+    CHECK_FLT(modbusmq_read_channel(context, msg, input, &flags), 655.35, 0.001, "0xFFFF without na_value is 655.35");
+
+    config->modbusmq_na_value = 0xFFFF;
+    config->has_na_value      = 1;
+
+    float
+        got = modbusmq_read_channel(context, msg, input, &flags);
+    CHECK(isnan(got), "0xFFFF with na_value is NaN, not 655.35");
+    modbusmq_channel_format_value(input, &flags, got, text, sizeof(text));
+    CHECK_STR(text, "null", "...and prints null");
+
+    data[0x0C] = 0xFF;
+    data[0x0D] = 0xFE;
+    CHECK_FLT(modbusmq_read_channel(context, msg, input, &flags), 655.34, 0.001, "0xFFFE with na_value is 655.34");
+    data[0x0D] = 0xFF;
+
+    CHECK_FLT(modbusmq_read_channel(context, msg, input, &current), -5.0, 0.001, "a signed 0xFFCE is still a value");
+
+    config->has_na_value = 0;
 }
 
 int
@@ -271,6 +315,11 @@ main(int argc, char **argv)
             CHECK_FLT(got, want->value, 0.001, what);
 
             checked_channels++;
+        }
+
+        if (i == 0)
+        {
+            test_na_value(context, &msg, input);
         }
     }
 

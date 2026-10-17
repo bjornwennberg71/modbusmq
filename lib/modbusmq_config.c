@@ -148,7 +148,7 @@ config_set_string(char **dst, const char *value)
 void
 modbusmq_config_debug_print(const char *key, const char *value, int line_num)
 {
-    printf("%3d: [%s]=[%s]\n", line_num, key, value);
+    modbusmq_logf(MODBUSMQ_LOG_DEBUG, "%3d: [%s]=[%s]\n", line_num, key, value);
 }
 
 
@@ -1476,6 +1476,7 @@ config_parse_stream(FILE *fp, const char *name)
     modbusmq_config->modbusmq_rts_delay_us    = 10000; // default 10 ms wait before send
     modbusmq_config->modbusmq_frame_timeout_ms = 1000; // maximum 1000 ms waiting for a frame before giving up
     modbusmq_config->modbusmq_slave_retry_max_ms = 300000;
+    modbusmq_config->modbusmq_frame_delay_ms     = -1; // resolved after parsing, from the connect string
     modbusmq_config->offset_size = 1; // default 1 byte offset calculation
     modbusmq_config->mqtt_retain = 1; // what publishing has always done
     modbusmq_config->mqtt_qos    = 0;
@@ -1575,6 +1576,33 @@ config_parse_stream(FILE *fp, const char *name)
         {
             modbusmq_config->modbusmq_slave_retry_max_ms = strtol(value, NULL, 0);
             if (modbusmq_config->modbusmq_slave_retry_max_ms < 0)
+            {
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: must not be negative\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+        }
+        else if (strcmp(key, "modbusmq.na_value") == 0)
+        {
+            char
+                *end = NULL;
+            long
+                raw = strtol(value, &end, 0);
+            if (end == value || *end != 0 || raw < 0 || raw > 0xFFFF)
+            {
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected a 16-bit register value\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->modbusmq_na_value = (uint16_t)raw;
+            modbusmq_config->has_na_value      = 1;
+        }
+        else if (strcmp(key, "modbusmq.frame_delay_ms") == 0)
+        {
+            modbusmq_config->modbusmq_frame_delay_ms = strtol(value, NULL, 0);
+            if (modbusmq_config->modbusmq_frame_delay_ms < 0)
             {
                 modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: must not be negative\n", line_num, key, value);
                 fclose(fp);
@@ -2591,6 +2619,16 @@ config_parse_stream(FILE *fp, const char *name)
     // onto their channels before anything runs, so the runtime never has to.
     //
     modbusmq_config_apply_publish_defaults(modbusmq_config);
+
+    // RTU gets a 50 ms frame_delay_ms unless set: a multi-drop RS485 slave can still hold the line after its answer
+    if (modbusmq_config->modbusmq_frame_delay_ms < 0)
+    {
+        modbusmq_config->modbusmq_frame_delay_ms = 0;
+        if (modbusmq_config->modbusmq_connect && strncmp(modbusmq_config->modbusmq_connect, "rtu://", 6) == 0)
+        {
+            modbusmq_config->modbusmq_frame_delay_ms = 50;
+        }
+    }
 
     //
     // In rounds mode the round decides when an input is read, so a per-input
