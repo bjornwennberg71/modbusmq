@@ -1418,17 +1418,12 @@ config_apply_module_topics(modbusmq_config_t *config)
     return 0;
 }
 
-int
-modbusmq_config_parse(const char *filename)
+//
+// The parser proper. Owns fp: every exit path closes it. name labels warnings.
+//
+static int
+config_parse_stream(FILE *fp, const char *name)
 {
-    FILE
-        *fp = fopen(filename, "r");
-    if (!fp)
-    {
-        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to open config-file: %s\n", filename);
-        return -1;
-    }
-
     char
         *line = 0,
         *key,
@@ -2536,7 +2531,7 @@ modbusmq_config_parse(const char *filename)
     // uses a format. config.version may appear anywhere in the file, so this
     // cannot be decided while parsing.
     //
-    modbusmq_config_apply_format_version(modbusmq_config, filename);
+    modbusmq_config_apply_format_version(modbusmq_config, name);
 
     //
     // Same idea, unrelated concern: resolve input-level publish defaults down
@@ -3015,6 +3010,42 @@ modbusmq_config_parse(const char *filename)
 
     
     return 0;
+}
+
+int
+modbusmq_config_parse(const char *filename)
+{
+    FILE
+        *fp = fopen(filename, "r");
+    if (!fp)
+    {
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to open config-file: %s\n", filename);
+        return -1;
+    }
+    return config_parse_stream(fp, filename);
+}
+
+//
+// Same as modbusmq_config_parse(), from a config held in memory (no filesystem,
+// e.g. Zephyr). text need not be NUL terminated; it is only read.
+//
+int
+modbusmq_config_parse_text(const char *text, size_t length)
+{
+    if (!text || length == 0)
+    {
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Empty config text\n");
+        return -1;
+    }
+
+    FILE
+        *fp = fmemopen((void *)text, length, "r");
+    if (!fp)
+    {
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "Unable to open config text: %s\n", strerror(errno));
+        return -1;
+    }
+    return config_parse_stream(fp, "<config text>");
 }
 
 //////////////////////////////////////////////////////////////////////////////

@@ -19,7 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 //
 // @brief Parse filename with these -e overrides.
@@ -35,41 +34,38 @@ parse(const char *filename, char *const *overrides, int noverrides)
 }
 
 //
-// @brief Write a config to a temporary file and parse it.
+// @brief Parse a config from memory with modbusmq_config_parse_text().
 //
 // The header is a working one-input config; body is appended to it, so each
 // case below only spells out what it is about.
 //
-// @return what modbusmq_config_parse() returned
+// @return what modbusmq_config_parse_text() returned
 //
 static int
 parse_text(const char *body, char *const *overrides, int noverrides)
 {
+    static const char
+        *header = "config.name = t\n"
+                  "config.version = 2.0\n"
+                  "modbusmq.connect = tcp://localhost:1\n";
+    size_t
+        length = strlen(header) + strlen(body) + 1;
     char
-        path[] = "/tmp/test_modules_XXXXXX";
-    int
-        fd = mkstemp(path);
+        *text = malloc(length + 1);
 
-    if (fd < 0)
+    if (!text)
     {
-        perror("mkstemp");
         return -100;
     }
+    snprintf(text, length + 1, "%s%s\n", header, body);
 
-    FILE
-        *fp = fdopen(fd, "w");
-
-    fprintf(fp,
-            "config.name = t\n"
-            "config.version = 2.0\n"
-            "modbusmq.connect = tcp://localhost:1\n"
-            "%s\n", body);
-    fclose(fp);
+    modbusmq_config_close();
+    modbusmq_config_set_overrides(overrides, noverrides);
 
     int
-        rc = parse(path, overrides, noverrides);
+        rc = modbusmq_config_parse_text(text, length);
 
-    unlink(path);
+    free(text);
     return rc;
 }
 

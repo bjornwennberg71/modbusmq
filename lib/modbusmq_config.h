@@ -9,6 +9,7 @@
 #ifndef modbusmq_config_h_
 #define modbusmq_config_h_
 
+#include <stddef.h>
 #include <stdint.h>
 
 //
@@ -503,6 +504,7 @@ typedef struct modbusmq_config_t
 
     
 extern int                 modbusmq_config_parse(const char *filename);
+extern int                 modbusmq_config_parse_text(const char *text, size_t length);
 extern modbusmq_config_t * modbusmq_config_get();
 
 //
