@@ -348,6 +348,16 @@ every subscribe, including after each reconnect, so a retained setpoint gets
 rewritten to the device every time. That is the publisher's setting, not something
 the config can override.
 
+### Raw requests
+
+`modbusmq` owns the serial port, so `modbusmq_query` cannot reach a live bus. Publish a request to `<mqtt.topic_prefix>request/raw` and read the answer from `<mqtt.topic_prefix>request/raw/reply` (QoS 0, never retained). The text is `[@tag] slave fc addr n` for a read (function 1-4) and `[@tag] slave fc addr v1 [v2 ...]` for a write (5, 6, 15, 16). The reply is one line: the request, ` -> `, then hex registers, a 0/1 bit string, `ok` or `error ...`. Examples: `41 4 0x1008 30` reads 30 input registers, `41 6 0x0100 7` writes 7 to a holding register.
+
+Writes are refused unless the config has `modbusmq.raw_write = 1`, and that includes broadcast (slave 0). One request is in flight at a time; a second one gets `error refused busy`. A `@tag` lets a client pick its own reply out of the topic.
+
+```
+modbusmq_query mqtt://localhost:1883 --prefix site/ --raw "41 4 0x1008 30"
+```
+
 ---
 
 ## 10. MQTT

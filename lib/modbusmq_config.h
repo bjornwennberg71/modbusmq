@@ -497,7 +497,8 @@ typedef struct modbusmq_config_t
     uint8_t             has_publish_min_interval:1;
     uint8_t             has_publish_max_interval:1;
     uint8_t             has_na_value:1;              // modbusmq.na_value is in the config
-    uint8_t             reserved:2;
+    uint8_t             raw_write:1;                 // modbusmq.raw_write: modbusmq_raw_request() may write
+    uint8_t             reserved:1;
 } modbusmq_config_t;
 
     

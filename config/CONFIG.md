@@ -97,6 +97,14 @@ modbusmq.na_value = 0xFFFF   # raw register value meaning "no value"; absent = o
 
 Some devices send a fixed raw value for "not available" (Shoto: 0xFFFF in any register). Scaled, it looks real: 655.35 V. With `na_value` set, a 16-bit `int_*`/`uint_*` channel whose raw register equals it reads as NaN and publishes `null`, checked before `add`/`mod`/`mul`. Bit, 32-bit, float and text formats are never matched. One global setting, no per-channel override. On a signed channel 0xFFFF is also a legitimate raw −1, which then publishes as `null` too.
 
+### Raw requests
+
+```
+modbusmq.raw_write = 0   # 1 lets raw requests over MQTT write (fc 5, 6, 15, 16) and broadcast
+```
+
+`<prefix>request/raw` takes one Modbus request as text, for probing a live bus while `modbusmq` owns the port: `41 4 0x1008 30` reads 30 input registers. The answer goes to `<prefix>request/raw/reply`. Reads are always allowed. Writes and slave 0 (broadcast) need `raw_write = 1`, because a wrong write to a BMS can disconnect a pack. See MODBUSMQ.md for the format.
+
 ### Timing
 
 ```

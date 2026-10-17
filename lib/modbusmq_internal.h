@@ -176,6 +176,14 @@ typedef struct modbusmq_context_t
                          // callback for errors, see modbusmq_set_error_callback()
     void                 (*error_cb)(struct modbusmq_context_t *, modbusmq_msg_t *, int error);
 
+                         // the one modbusmq_raw_request() in flight, raw_cb NULL when none
+    modbusmq_raw_reply_t  raw_cb;
+    void                 *raw_user;
+    char                 *raw_text;     // the request as given, echoed in the reply
+    uint32_t              raw_req_id;
+    uint16_t              raw_count;    // registers or bits read
+    uint8_t               raw_fc;
+
                          // source of modbusmq_msg_t.req_id, incremented per
                          // request. Wraps after 4 billion requests, which at
                          // one request per millisecond is ~50 days — long

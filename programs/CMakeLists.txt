@@ -37,6 +37,9 @@ endif()
 #
 add_executable(modbusmq_query modbusmq_query.c)
 target_link_libraries(modbusmq_query modbusmq)
+if(MQTT_ENABLED)
+    target_link_libraries(modbusmq_query mosquitto)
+endif()
 
 #
 # modbusmq_server

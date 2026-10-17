@@ -1599,6 +1599,19 @@ config_parse_stream(FILE *fp, const char *name)
             modbusmq_config->modbusmq_na_value = (uint16_t)raw;
             modbusmq_config->has_na_value      = 1;
         }
+        else if (strcmp(key, "modbusmq.raw_write") == 0)
+        {
+            int
+                on = config_boolean(value);
+            if (on < 0)
+            {
+                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1 or 0\n", line_num, key, value);
+                fclose(fp);
+                free(line);
+                return -1;
+            }
+            modbusmq_config->raw_write = on;
+        }
         else if (strcmp(key, "modbusmq.frame_delay_ms") == 0)
         {
             modbusmq_config->modbusmq_frame_delay_ms = strtol(value, NULL, 0);

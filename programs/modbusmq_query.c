@@ -14,6 +14,12 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <time.h>
+#include <unistd.h>
+
+#if MQTT_ENABLED
+#include <mosquitto.h>
+#endif
 
 
 const char *version = MODBUSMQ_VERSION_STRING;
@@ -41,6 +47,11 @@ typedef struct global_info
     int         function;    // modbusmq_write_function_e; --function was given, register writes only
     int         dry_run;     // build and print the frame, send nothing
     int         timeout_ms;  // --timeout was given; 0 means "not given, keep modbusmq_send()'s own 2000ms default"
+    const char *prefix;      // --prefix, mqtt:// mode only
+    const char *raw;         // --raw request text, mqtt:// mode only
+    char        raw_tag[32]; // "@tag" the reply is matched on
+    char        raw_reply[1024];
+    int         raw_done;
 } global_info;
 
 static global_info GI;
@@ -54,6 +65,7 @@ print_help(int argc, char **argv, int print_long)
     (void)argc;
     printf("read : %s connect-string slave-id register_type addr naddr byte-size\n", argv[0]);
     printf("write: %s connect-string slave-id register_type addr --write value [--format fmt] [--mod n] [--mul n] [--add n] [--dry-run]\n", argv[0]);
+    printf("raw  : %s mqtt://host:port [--prefix p] [--timeout ms] --raw \"slave fc addr n|values\"\n", argv[0]);
     printf("example: %s <rtu:///dev/ttyUSB3:9600:1:8:N | tcp://hostname:port> slave_id <%s | %s | %s>  addr naddr <-4|-2> \n", argv[0], MODBUSMQ_TYPE_INPUT_REGISTER, MODBUSMQ_TYPE_HOLDING_REGISTER, MODBUSMQ_TYPE_COIL);
 
     if (print_long)
@@ -87,6 +99,10 @@ print_help(int argc, char **argv, int print_long)
         printf("--timeout ms         : max time to wait for a response before giving up.\n");
         printf("                        Default 2000ms if not given.\n");
         printf("\n");
+        printf("mqtt     :              mqtt://host:port sends --raw to a running modbusmq over its broker\n");
+        printf("--prefix p            : mqtt.topic_prefix of that modbusmq, e.g. site/. Default empty.\n");
+        printf("--raw request         : e.g. \"41 4 0x1008 30\"; writes need modbusmq.raw_write = 1 there.\n");
+        printf("\n");
         printf("write examples:\n");
         printf("  # 25.5 degC into a signed register holding tenths\n");
         printf("  %s tcp://host:502 39 %s 0x0028 --write 25.5 --format int_ab --mod -10\n", argv[0], MODBUSMQ_TYPE_HOLDING_REGISTER);
@@ -111,7 +127,8 @@ parse_argv(int argc, char **argv)
             print_help(argc, argv, 1);
             return 1;
         }
-        else if (strstr(argv[a], "tcp") || strstr(argv[a], "rtu"))
+        else if (strncmp(argv[a], "mqtt://", 7) == 0 ||
+                 strstr(argv[a], "tcp") || strstr(argv[a], "rtu"))
         {
             GI.connect = argv[a];
         }
@@ -121,7 +138,7 @@ parse_argv(int argc, char **argv)
             return 1;
         }
         
-        else if (GI.slave < 0)
+        else if (GI.slave < 0 && strncmp(argv[a], "--", 2) != 0)
         {
             GI.slave = strtod(argv[a], NULL);
         }
@@ -158,6 +175,8 @@ parse_argv(int argc, char **argv)
                  strcmp(argv[a], "--mul") == 0 ||
                  strcmp(argv[a], "--add") == 0 ||
                  strcmp(argv[a], "--function") == 0 ||
+                 strcmp(argv[a], "--prefix") == 0 ||
+                 strcmp(argv[a], "--raw") == 0 ||
                  strcmp(argv[a], "--timeout") == 0)
         {
             const char
@@ -201,6 +220,8 @@ parse_argv(int argc, char **argv)
                     return -1;
                 }
             }
+            else if (strcmp(flag, "--prefix") == 0) { GI.prefix = argv[a]; }
+            else if (strcmp(flag, "--raw") == 0) { GI.raw = argv[a]; }
             else if (strcmp(flag, "--mod") == 0) { GI.mod = (int)strtol(argv[a], NULL, 0); }
             else if (strcmp(flag, "--mul") == 0) { GI.mul = (int)strtol(argv[a], NULL, 0); }
             else if (strcmp(flag, "--add") == 0) { GI.add = (int)strtol(argv[a], NULL, 0); }
@@ -246,7 +267,16 @@ parse_argv(int argc, char **argv)
         fprintf(stderr, "connect-string missing\n");
         return -1;
     }
-    else if (GI.slave < 0)
+    if (strncmp(GI.connect, "mqtt://", 7) == 0)
+    {
+        if (!GI.raw)
+        {
+            fprintf(stderr, "mqtt:// needs --raw\n");
+            return -1;
+        }
+        return 0;
+    }
+    if (GI.slave < 0)
     {
         fprintf(stderr, "Slave id missing\n");
         return -1;
@@ -286,11 +316,127 @@ parse_argv(int argc, char **argv)
     return 0;
 }
 
-void
-read_stdio()
+#if MQTT_ENABLED
+static void
+raw_message_callback(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *message)
 {
-    
+    (void)mosq;
+    (void)userdata;
+    size_t
+        ntag = strlen(GI.raw_tag),
+        len  = message->payloadlen;
+
+    if (len <= ntag || len >= sizeof(GI.raw_reply) ||
+        memcmp(message->payload, GI.raw_tag, ntag) != 0 || ((char *)message->payload)[ntag] != ' ')
+    {
+        return;
+    }
+    memcpy(GI.raw_reply, message->payload, len);
+    GI.raw_reply[len] = 0;
+    GI.raw_done = 1;
 }
+
+//
+// Ask a running modbusmq for one raw request over its broker and print the reply.
+//
+static int
+query_mqtt(void)
+{
+    modbusmq_connect_t
+        connect;
+    char
+        request[1024],
+        topic[256],
+        reply_topic[272];
+    int
+        rc = -1;
+    struct mosquitto
+        *mosq = NULL;
+
+    if (modbusmq_parse_connect_string(GI.connect, &connect) != 0)
+    {
+        fprintf(stderr, "Unable to parse connect string\n");
+        return -1;
+    }
+
+    if (GI.raw[0] == '@')
+    {
+        snprintf(request, sizeof(request), "%s", GI.raw);
+        snprintf(GI.raw_tag, sizeof(GI.raw_tag), "%.*s", (int)strcspn(GI.raw, " "), GI.raw);
+    }
+    else
+    {
+        snprintf(GI.raw_tag, sizeof(GI.raw_tag), "@q%d", (int)getpid());
+        snprintf(request, sizeof(request), "%s %s", GI.raw_tag, GI.raw);
+    }
+    snprintf(topic, sizeof(topic), "%srequest/raw", GI.prefix ? GI.prefix : "");
+    snprintf(reply_topic, sizeof(reply_topic), "%s/reply", topic);
+
+    mosquitto_lib_init();
+    mosq = mosquitto_new(NULL, true, NULL);
+    if (!mosq)
+    {
+        fprintf(stderr, "Unable to create MQTT client\n");
+        goto done;
+    }
+    mosquitto_message_callback_set(mosq, &raw_message_callback);
+
+    if (mosquitto_connect(mosq, connect.device, connect.port, 60) != MOSQ_ERR_SUCCESS)
+    {
+        fprintf(stderr, "Unable to connect to broker %s:%d\n", connect.device, connect.port);
+        goto done;
+    }
+    if (mosquitto_subscribe(mosq, NULL, reply_topic, 1) != MOSQ_ERR_SUCCESS ||
+        mosquitto_publish(mosq, NULL, topic, strlen(request), request, 1, false) != MOSQ_ERR_SUCCESS)
+    {
+        fprintf(stderr, "Unable to subscribe/publish\n");
+        goto done;
+    }
+
+    struct timespec
+        now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long
+        deadline_ms = now.tv_sec * 1000L + now.tv_nsec / 1000000L + (GI.timeout_ms > 0 ? GI.timeout_ms : 5000);
+
+    while (!GI.raw_done)
+    {
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec * 1000L + now.tv_nsec / 1000000L >= deadline_ms)
+        {
+            fprintf(stderr, "No reply to %s within the timeout\n", GI.raw_tag);
+            goto done;
+        }
+        if (mosquitto_loop(mosq, 50, 1) != MOSQ_ERR_SUCCESS)
+        {
+            fprintf(stderr, "Lost connection to broker\n");
+            goto done;
+        }
+    }
+
+    printf("%s\n", GI.raw_reply);
+    if (strstr(GI.raw_reply, " -> error"))
+    {
+        goto done;
+    }
+    rc = 0;
+
+done:
+    if (mosq)
+    {
+        mosquitto_destroy(mosq);
+    }
+    mosquitto_lib_cleanup();
+    return rc;
+}
+#else
+static int
+query_mqtt(void)
+{
+    fprintf(stderr, "mqtt:// is not available: built without MQTT\n");
+    return -1;
+}
+#endif
 
 
 //////////////////////////////////////////////////////////////////////////////
@@ -317,6 +463,11 @@ main(int argc, char **argv)
     }
 
     modbusmq_set_debug(GI.verbose);
+
+    if (strncmp(GI.connect, "mqtt://", 7) == 0)
+    {
+        return query_mqtt();
+    }
     
     
     modbusmq_msg_t

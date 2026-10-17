@@ -165,6 +165,10 @@ modbusmq_free(modbusmq_context_t *context)
         context->config = NULL;
     }
 
+    free(context->raw_text);
+    context->raw_text = NULL;
+    context->raw_cb   = NULL;
+
     context->cb.modbusmq_free(context);
     
     if (context->fd >= 0)
@@ -506,6 +510,113 @@ modbusmq_frame_delay_left(modbusmq_context_t *context, millitime_t now)
     return context->last_read_ms + (millitime_t)delay - now;
 }
 
+//
+// modbusmq_raw_request(): hand the one line of reply to the caller and clear
+// the slot first, so the callback may post the next request.
+//
+static void
+modbusmq_raw_reply(modbusmq_context_t *context, const char *result)
+{
+    modbusmq_raw_reply_t
+        cb = context->raw_cb;
+    void
+        *user = context->raw_user;
+    char
+        *text = context->raw_text;
+    size_t
+        len = strlen(text) + strlen(result) + 5;
+    char
+        *line = malloc(len);
+
+    context->raw_cb   = NULL;
+    context->raw_text = NULL;
+
+    if (line)
+    {
+        snprintf(line, len, "%s -> %s", text, result);
+        cb(context, line, user);
+    }
+    else
+    {
+        cb(context, "error out of memory", user);
+    }
+    free(line);
+    free(text);
+}
+
+static int
+modbusmq_raw_pending(modbusmq_context_t *context, const modbusmq_msg_t *msg)
+{
+    return context->raw_cb && msg->req_id == context->raw_req_id;
+}
+
+static void
+modbusmq_raw_error(modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
+{
+    char
+        result[96];
+
+    if (error == MODBUSMQ_ERR_EXCEPTION)
+    {
+        int
+            code = modbusmq_frame_exception_code(context, &msg->frame[1]);
+        snprintf(result, sizeof(result), "error exception %d %s", code, modbusmq_exception_string(code));
+    }
+    else
+    {
+        snprintf(result, sizeof(result), "error %s", modbusmq_strerror(error));
+    }
+    modbusmq_raw_reply(context, result);
+}
+
+// a complete answer: registers as hex words, bits as a 0/1 string, a write as ok
+static void
+modbusmq_raw_done(modbusmq_context_t *context, modbusmq_msg_t *msg)
+{
+    const uint8_t
+        *data = modbusmq_frame_data(context, &msg->frame[1]);
+    int
+        n = context->raw_count;
+    char
+        *result = NULL;
+
+    switch(context->raw_fc)
+    {
+    case 1:
+    case 2:
+        result = malloc(n + 1);
+        if (result)
+        {
+            for(int i = 0; i < n; ++i)
+            {
+                result[i] = '0' + ((data[i / 8] >> (i % 8)) & 1);
+            }
+            result[n] = 0;
+        }
+        break;
+    case 3:
+    case 4:
+        result = malloc(n * 7 + 1);
+        if (result)
+        {
+            int
+                pos = 0;
+            result[0] = 0;
+            for(int i = 0; i < n; ++i)
+            {
+                pos += snprintf(result + pos, 8, "%s0x%04X", i ? " " : "", (data[2 * i] << 8) | data[2 * i + 1]);
+            }
+        }
+        break;
+    default:
+        modbusmq_raw_reply(context, "ok");
+        return;
+    }
+
+    modbusmq_raw_reply(context, result ? result : "error out of memory");
+    free(result);
+}
+
 /**
  *
  * @brief report a failed request to the caller, if it asked to hear about them
@@ -517,6 +628,12 @@ modbusmq_frame_delay_left(modbusmq_context_t *context, millitime_t now)
 static void
 modbusmq_report_error(modbusmq_context_t *context, modbusmq_msg_t *msg, int error)
 {
+    if (modbusmq_raw_pending(context, msg))
+    {
+        modbusmq_raw_error(context, msg, error);
+        return;
+    }
+
     if (msg->msg_id > 0 && (error == MODBUSMQ_ERR_TIMEOUT || error == MODBUSMQ_ERR_EXCEPTION))
     {
         modbusmq_slave_update(context, msg->msg_id, error == MODBUSMQ_ERR_EXCEPTION);
@@ -3669,6 +3786,255 @@ modbusmq_post(modbusmq_context_t *context, modbusmq_msg_t *msg)
     return modbusmq_post_internal(context, msg, MODBUSMQ_MSG_POST);
 }
 
+// one number of a raw request: 1 parsed, 0 end of text, -1 not a number
+static int
+modbusmq_raw_number(const char **p, long *value)
+{
+    char
+        *end;
+
+    *p += strspn(*p, " \t");
+    if (**p == 0)
+    {
+        return 0;
+    }
+    *value = strtol(*p, &end, 0);
+    if (end == *p || (*end != 0 && *end != ' ' && *end != '\t'))
+    {
+        return -1;
+    }
+    *p = end;
+    return 1;
+}
+
+static void
+modbusmq_raw_refuse(modbusmq_context_t *context, const char *text, const char *reason, modbusmq_raw_reply_t reply_cb, void *user)
+{
+    size_t
+        len = strlen(text) + strlen(reason) + 20;
+    char
+        *line = malloc(len);
+
+    if (!line)
+    {
+        reply_cb(context, "error out of memory", user);
+        return;
+    }
+    snprintf(line, len, "%s -> error refused %s", text, reason);
+    reply_cb(context, line, user);
+    free(line);
+}
+
+/**
+ *
+ * @brief post a raw request given as text, see modbusmq.h
+ *
+ * @param context : allocated context
+ * @param text    : "[@tag] slave fc addr n" or "[@tag] slave fc addr v1 [v2 ...]"
+ * @param reply_cb: called once with the reply line, possibly before this returns
+ * @param user    : handed to reply_cb
+ *
+ * @return 0 when posted, < 0 when refused
+ */
+int
+modbusmq_raw_request(modbusmq_context_t *context, const char *text, modbusmq_raw_reply_t reply_cb, void *user)
+{
+    if (!context || !text || !reply_cb)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    // the request without surrounding whitespace is what the reply echoes
+    const char
+        *start = text + strspn(text, " \t\r\n");
+    size_t
+        n = strlen(start);
+    while (n > 0 && strchr(" \t\r\n", start[n - 1]))
+    {
+        n--;
+    }
+    char
+        *echo = malloc(n + 1);
+    if (!echo)
+    {
+        reply_cb(context, "error out of memory", user);
+        return -1;
+    }
+    memcpy(echo, start, n);
+    echo[n] = 0;
+
+    const char
+        *p = echo,
+        *reason = NULL;
+    long
+        slave,
+        fc,
+        addr,
+        value,
+        count = 0;
+    uint16_t
+        values[123];
+    uint8_t
+        bits[16];
+    int
+        nvalues = 0,
+        rc = 0,
+        writes = context->config && context->config->raw_write,
+        saved_slave = context->slave_id;
+    modbusmq_msg_t
+        msg;
+
+    if (context->raw_cb)
+    {
+        reason = "busy, one request at a time";
+        goto refuse;
+    }
+
+    // a tag is only echoed
+    if (*p == '@')
+    {
+        p += strcspn(p, " \t");
+    }
+
+    if (modbusmq_raw_number(&p, &slave) != 1 || modbusmq_raw_number(&p, &fc) != 1 || modbusmq_raw_number(&p, &addr) != 1)
+    {
+        reason = "expected slave fc addr";
+        goto refuse;
+    }
+    while ((rc = modbusmq_raw_number(&p, &value)) == 1)
+    {
+        if (nvalues == 123)
+        {
+            reason = "more than 123 values";
+            goto refuse;
+        }
+        if (value < -32768 || value > 0xFFFF)
+        {
+            reason = "value outside 16 bits";
+            goto refuse;
+        }
+        values[nvalues++] = (uint16_t)value;
+    }
+    if (rc < 0)
+    {
+        reason = "not a number";
+        goto refuse;
+    }
+    if (slave < 0 || slave > 247 || addr < 0 || addr > 0xFFFF)
+    {
+        reason = "slave 0-247, addr 0-0xFFFF";
+        goto refuse;
+    }
+    // Polarium connects and disconnects packs with a broadcast write
+    if (slave == 0 && !writes)
+    {
+        reason = "slave 0 is broadcast, needs modbusmq.raw_write = 1";
+        goto refuse;
+    }
+
+    memset(&msg, 0, sizeof(msg));
+    modbusmq_set_slave(context, (int)slave);
+
+    switch(fc)
+    {
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+        count = nvalues == 1 ? values[0] : 0;
+        if (nvalues != 1 || count < 1 || count > 2000 || (fc >= 3 && count > 125) || slave == 0)
+        {
+            reason = "a read takes one count, 1-2000 bits or 1-125 registers, and no broadcast";
+            break;
+        }
+        if (fc == 1)
+        {
+            rc = modbusmq_frame_read_coil_bits(context, &msg.frame[0], (int)addr, (int)count);
+        }
+        else if (fc == 2)
+        {
+            rc = modbusmq_frame_read_input_bits(context, &msg.frame[0], (int)addr, (int)count);
+        }
+        else if (fc == 3)
+        {
+            rc = modbusmq_frame_read_holding_registers(context, &msg.frame[0], (int)addr, (int)count);
+        }
+        else
+        {
+            rc = modbusmq_frame_read_input_registers(context, &msg.frame[0], (int)addr, (int)count);
+        }
+        break;
+    case 5:
+    case 6:
+    case 15:
+    case 16:
+        if (!writes)
+        {
+            reason = "writes need modbusmq.raw_write = 1";
+            break;
+        }
+        if (nvalues < 1 || (fc <= 6 && nvalues != 1))
+        {
+            reason = "fc 5 and 6 take one value, fc 15 and 16 one or more";
+            break;
+        }
+        if (fc == 5)
+        {
+            rc = modbusmq_frame_write_coil_bit(context, &msg.frame[0], (int)addr, values[0] != 0);
+        }
+        else if (fc == 6)
+        {
+            rc = modbusmq_frame_write_register(context, &msg.frame[0], (int)addr, values[0]);
+        }
+        else if (fc == 15)
+        {
+            memset(bits, 0, sizeof(bits));
+            for(int i = 0; i < nvalues; ++i)
+            {
+                bits[i / 8] |= (values[i] != 0) << (i % 8);
+            }
+            rc = modbusmq_frame_write_coil_bits(context, &msg.frame[0], (int)addr, nvalues, bits);
+        }
+        else
+        {
+            rc = modbusmq_frame_write_registers(context, &msg.frame[0], (int)addr, nvalues, values);
+        }
+        break;
+    default:
+        reason = "fc must be 1-6, 15 or 16";
+        break;
+    }
+
+    modbusmq_set_slave(context, saved_slave);
+
+    if (!reason && rc < 0)
+    {
+        reason = "frame could not be built";
+    }
+    if (!reason && modbusmq_post(context, &msg) < 0)
+    {
+        reason = "could not be queued";
+    }
+    if (reason)
+    {
+        goto refuse;
+    }
+
+    context->raw_cb     = reply_cb;
+    context->raw_user   = user;
+    context->raw_text   = echo;
+    context->raw_req_id = msg.req_id;
+    context->raw_count  = (uint16_t)count;
+    context->raw_fc     = (uint8_t)fc;
+    return 0;
+
+refuse:
+    modbusmq_raw_refuse(context, echo, reason, reply_cb, user);
+    free(echo);
+    return -1;
+}
+
 /**
  * 
  * @brief Validate a Modbusmq message before sending.
@@ -4596,7 +4962,11 @@ modbusmq_handle_msg(modbusmq_context_t *context, modbusmq_msg_wrapper_t *wrapper
         return MODBUSMQ_ERR_PROTOCOL;
     }
 
-    if (wrapper->flags == MODBUSMQ_MSG_POST)
+    if (wrapper->flags == MODBUSMQ_MSG_POST && modbusmq_raw_pending(context, &wrapper->msg))
+    {
+        modbusmq_raw_done(context, &wrapper->msg);
+    }
+    else if (wrapper->flags == MODBUSMQ_MSG_POST)
     {
         // callback to user
         if (context->message_cb)

@@ -120,6 +120,76 @@ pump(struct modbusmq_context_t *context, int for_ms)
 }
 
 //
+// modbusmq_raw_request() reply, kept for the checks
+//
+static char raw_reply[256];
+static int  raw_replies = 0;
+
+static void
+on_raw_reply(struct modbusmq_context_t *context, const char *reply, void *user)
+{
+    (void)context;
+    (void)user;
+    snprintf(raw_reply, sizeof(raw_reply), "%s", reply);
+    raw_replies++;
+}
+
+// post one raw request and pump until it is answered
+static int
+raw(struct modbusmq_context_t *context, const char *text)
+{
+    int
+        before = raw_replies,
+        rc = modbusmq_raw_request(context, text, on_raw_reply, NULL);
+
+    for(int i = 0; i < 40 && raw_replies == before; ++i)
+    {
+        pump(context, 50);
+    }
+    return rc;
+}
+
+static void
+test_raw_request(struct modbusmq_context_t *context, modbusmq_config_t *config)
+{
+    printf("raw request\n");
+
+    CHECK_INT(raw(context, " 1 4 0 2\n"), 0, "raw read posted");
+    CHECK_STR(raw_reply, "1 4 0 2 -> 0x12C0 0xFFCE", "...registers as hex words");
+
+    raw(context, "@probe 1 3 0x100 1");
+    CHECK_STR(raw_reply, "@probe 1 3 0x100 1 -> 0x04D2", "tag echoed with a holding register");
+
+    raw(context, "1 1 0 3");
+    CHECK_STR(raw_reply, "1 1 0 3 -> 101", "coils as a 0/1 string, lowest address first");
+
+    CHECK(raw(context, "1 6 0x100 7") < 0, "write refused without raw_write");
+    CHECK_STR(raw_reply, "1 6 0x100 7 -> error refused writes need modbusmq.raw_write = 1", "...and says why");
+    CHECK(raw(context, "1 4") < 0, "short request refused");
+    CHECK(raw(context, "1 4 0 126") < 0, "126 registers refused");
+    CHECK(raw(context, "1 4 0 x") < 0, "garbage refused");
+
+    int
+        before = raw_replies;
+    CHECK_INT(modbusmq_raw_request(context, "1 4 0 1", on_raw_reply, NULL), 0, "first of two posted");
+    CHECK(modbusmq_raw_request(context, "1 4 0 1", on_raw_reply, NULL) < 0, "second refused while one is in flight");
+    CHECK_STR(raw_reply, "1 4 0 1 -> error refused busy, one request at a time", "...as busy");
+    for(int i = 0; i < 40 && raw_replies < before + 2; ++i)
+    {
+        pump(context, 50);
+    }
+    CHECK_STR(raw_reply, "1 4 0 1 -> 0x12C0", "the first is still answered");
+
+    config->raw_write = 1;
+    raw(context, "1 6 0x100 7");
+    CHECK_STR(raw_reply, "1 6 0x100 7 -> ok", "write with raw_write = 1");
+    raw(context, "1 15 0 1 0 1");
+    CHECK_STR(raw_reply, "1 15 0 1 0 1 -> ok", "coil block write");
+    config->raw_write = 0;
+    CHECK(raw(context, "0 6 0x100 7") < 0, "broadcast refused without raw_write");
+}
+
+//
 // sleep_time is in/out: the caller's value is a ceiling, 0 asks for the default
 //
 static void
@@ -257,6 +327,8 @@ main(int argc, char **argv)
 
         CHECK(elapsed < 1000, "negative mswait returns promptly instead of waiting forever");
     }
+
+    test_raw_request(context, config);
 
     //
     // modbusmq.frame_delay_ms: no request goes out within the gap after an answer,

@@ -197,6 +197,18 @@ extern void modbusmq_frame_debug(                 struct modbusmq_context_t *con
     
 // post a message; queued ahead of waiting subscription polls, in post order
 extern int  modbusmq_post(                struct modbusmq_context_t *context, modbusmq_msg_t *msg);
+
+//
+// Raw request as text, for probing a live bus from outside (MQTT). Reads, fc 1-4:
+// "[@tag] slave fc addr n". Writes, fc 5/6/15/16, only with modbusmq.raw_write = 1:
+// "[@tag] slave fc addr v1 [v2 ...]". Posted like modbusmq_post(): behind the request
+// on the wire, ahead of every waiting poll. reply_cb gets one line, the request, " -> ",
+// then hex registers, a 0/1 bit string, "ok", or "error ...". One request at a time.
+//
+// Returns 0 when posted, < 0 when refused; reply_cb has then already been called.
+//
+typedef void (*modbusmq_raw_reply_t)(struct modbusmq_context_t *context, const char *reply, void *user);
+extern int  modbusmq_raw_request(         struct modbusmq_context_t *context, const char *text, modbusmq_raw_reply_t reply_cb, void *user);
 // subscribe to message every interval in ms, or MODBUSMQ_INTERVAL_ONCE
 #define MODBUSMQ_INTERVAL_ONCE   (-1)    // read at start and after each reset/reconnect, then never again
 #define MODBUSMQ_ONCE_RETRY_MS   10000   // a once read that got no valid reply is retried this often

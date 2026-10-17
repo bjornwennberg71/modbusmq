@@ -1027,6 +1027,45 @@ modbus_write_post(struct modbusmq_context_t *context, const modbusmq_write_t *wr
 
 //////////////////////////////////////////////////////////////////////////////
 //
+// Raw requests: the request topic is <mqtt.topic_prefix>request/raw and the
+// reply goes to <request topic>/reply, so a client needs nothing but the prefix.
+//
+static void
+raw_topic(char *topic, size_t size, const char *suffix)
+{
+    const char
+        *prefix = modbusmq_config_get()->mqtt_topic_prefix;
+
+    snprintf(topic, size, "%srequest/raw%s", prefix ? prefix : "", suffix);
+}
+
+static void
+raw_reply_callback(struct modbusmq_context_t *context, const char *reply, void *user)
+{
+    (void)context;
+    (void)user;
+    char
+        topic[256];
+
+    modbusmq_logf(MODBUSMQ_LOG_INFO, "raw: %s\n", reply);
+
+    if (!GI.has_mqtt || !GI.mqtt_connected)
+    {
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "raw: not connected to the broker. action: reply dropped\n");
+        return;
+    }
+
+    raw_topic(topic, sizeof(topic), "/reply");
+    int
+        rc = mosquitto_publish(GI.mosq, NULL, topic, strlen(reply), reply, 0, 0);
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "MQTT: unable to publish raw reply to %s (rc=%d)\n", topic, rc);
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
 // mosquitto message callback: an incoming publish on a write topic
 //
 // More than one write entry may share a topic, so every match is acted on
@@ -1068,6 +1107,16 @@ mqtt_message_callback(struct mosquitto *mosq, void *userdata, const struct mosqu
         memcpy(payload, message->payload, len);
     }
     payload[len] = 0;
+
+    char
+        request_topic[256];
+    raw_topic(request_topic, sizeof(request_topic), "");
+    if (strcmp(message->topic, request_topic) == 0)
+    {
+        // refusals reply synchronously through raw_reply_callback
+        modbusmq_raw_request(context, payload, raw_reply_callback, NULL);
+        return;
+    }
 
     int
         matched = 0;
@@ -1173,6 +1222,15 @@ mqtt_subscribe_writes(void)
                       write->topic, write->name ? write->name : "write",
                       write->ack_topic ? ", ack on " : "",
                       write->ack_topic ? write->ack_topic : "");
+    }
+
+    char
+        request_topic[256];
+    raw_topic(request_topic, sizeof(request_topic), "");
+    if (mosquitto_subscribe(GI.mosq, NULL, request_topic, 1) != MOSQ_ERR_SUCCESS)
+    {
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "MQTT: unable to subscribe to %s\n", request_topic);
+        rc_all = -1;
     }
 
     return rc_all;
@@ -1541,10 +1599,8 @@ main(int argc, char **argv)
         GI.mosq = mosquitto_new(modbusmq_config->mqtt_name, true, context);
         assert(GI.mosq);
 
-        if (modbusmq_config->write_max > 0)
-        {
-            mosquitto_message_callback_set(GI.mosq, &mqtt_message_callback);
-        }
+        // always: request/raw arrives here even when the config has no writes
+        mosquitto_message_callback_set(GI.mosq, &mqtt_message_callback);
 
         // TODO: mosquitto_connect() blocks until TCP gives up on a dead remote host.
         //       Use mosquitto_connect_async() and finish the connect from the poll
