@@ -75,7 +75,9 @@
 extern "C" {
 #endif
 
-    // FORWARD DECL
+// FORWARD DECLS /////////////////////////////////////////////////////////////
+struct modbusmq_context_t;
+struct modbusmq_config_t;
 struct modbusmq_input_t;
 struct modbusmq_channel_t;
 struct modbusmq_write_t;
@@ -100,28 +102,20 @@ typedef struct modbusmq_frame_t
 //
 typedef struct modbusmq_msg_t
 {
-    int            msg_id;   // subscription timer id, 0 for one-shot messages
-
-                             // Identifies this one request/response attempt.
-                             // Stamped by the library on post/subscribe/send
-                             // and never reused, so a subscription polling the
-                             // same slave every 2 s gets a new req_id per poll.
-                             // Every error line carries it, and it is readable
-                             // from the message handed to the callbacks — that
-                             // is how a caller ties an error on a shared RTU
-                             // bus back to the device that produced it.
-                             //
-                             // RTU has no transaction id on the wire, so this
-                             // is a local correlation id, not something the
-                             // slave ever sees.
+    int        msg_id;          // subscription timer id, 0 for one-shot messages
+    
+    // Identifies this one request/response attempt.
+    // Stamped by the library on post/subscribe/send  and never reused, so a subscription polling the
+    // same slave every 2 s gets a new req_id per poll. Every error line carries it, and it is readable
+    // from the message handed to the callbacks — that is how a caller ties an error on a shared RTU
+    // bus back to the device that produced it.
+    //
+    // RTU has no transaction id on the wire, so this is a local correlation id, not something the slave ever sees.
     uint32_t       req_id;
 
     modbusmq_frame_t frame[2];
 } modbusmq_msg_t;
 
-// FORWARD DECLS /////////////////////////////////////////////////////////////
-struct modbusmq_context_t;
-struct modbusmq_config_t;
 
 // FUNCTIONS /////////////////////////////////////////////////////////////////
 //
@@ -305,8 +299,9 @@ extern int   modbusmq_channel_format_value(const struct modbusmq_input_t *input,
 
 //
 // Decide whether a freshly read channel value should be published now, and
-// record the outcome into the channel's runtime state (last_value, last_text,
-// last_publish_ms, published) when it says yes.
+// record the outcome into the channel's runtime state (last_value or
+// last_text_hash, last_publish_ms, published) when it says yes. input is the
+// channel's input, needed to re-print last_value for the comparison.
 //
 // text is the value already formatted by modbusmq_channel_format_value() —
 // "unchanged" is judged on what would actually be printed/published, at the
@@ -320,7 +315,7 @@ extern int   modbusmq_channel_format_value(const struct modbusmq_input_t *input,
 //
 // Returns 1 = publish, 0 = suppress, < 0 on bad arguments.
 //
-extern int   modbusmq_channel_publish_decide(struct modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms);
+extern int   modbusmq_channel_publish_decide(const struct modbusmq_input_t *input, struct modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms);
 
 //
 // Text channels: serial numbers, firmware versions, timestamps.

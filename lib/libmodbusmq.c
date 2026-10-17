@@ -836,29 +836,29 @@ modbusmq_format_size(int format)
 {
     switch (format)
     {
-    case modbusmq_data_format_a:
-    case modbusmq_data_format_int8:
-        return 1;
-    case modbusmq_data_format_ab:
-    case modbusmq_data_format_ba:
-    case modbusmq_data_format_int16_ab:
-    case modbusmq_data_format_int16_ba:
-    case modbusmq_data_format_float_ba:
-    case modbusmq_data_format_version_ab:
-        return 2;
+        case modbusmq_data_format_a:
+        case modbusmq_data_format_int8:
+            return 1;
+        case modbusmq_data_format_ab:
+        case modbusmq_data_format_ba:
+        case modbusmq_data_format_int16_ab:
+        case modbusmq_data_format_int16_ba:
+        case modbusmq_data_format_float_ba:
+        case modbusmq_data_format_version_ab:
+            return 2;
 
-    case modbusmq_data_format_datetime_regs:
-        return 12; // six registers, one field each
+        case modbusmq_data_format_datetime_regs:
+            return 12; // six registers, one field each
 
-    case modbusmq_data_format_ascii_ab:
-    case modbusmq_data_format_ascii_ba:
-    case modbusmq_data_format_bcd_ab:
-    case modbusmq_data_format_bcd_ba:
-    case modbusmq_data_format_version_regs:
-        return 0; // variable: see channel.length
+        case modbusmq_data_format_ascii_ab:
+        case modbusmq_data_format_ascii_ba:
+        case modbusmq_data_format_bcd_ab:
+        case modbusmq_data_format_bcd_ba:
+        case modbusmq_data_format_version_regs:
+            return 0; // variable: see channel.length
 
-    default:
-        return 4;
+        default:
+            return 4;
     }
 }
 
@@ -1670,15 +1670,53 @@ modbusmq_channel_format_value(const modbusmq_input_t *input, const modbusmq_chan
 // "publish" exit of modbusmq_channel_publish_decide() below so the bookkeeping
 // cannot drift out of step between them.
 //
+// FNV-1a, 32 bit
+static uint32_t
+modbusmq_text_hash(const char *text)
+{
+    uint32_t
+        hash = 2166136261u;
+
+    for(const unsigned char *p = (const unsigned char *)text; *p; ++p)
+    {
+        hash ^= *p;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
 static void
 modbusmq_channel_publish_record(modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms)
 {
-    channel->last_value      = value;
+    if (modbusmq_format_is_text(channel->format))
+    {
+        channel->last_text_hash = modbusmq_text_hash(text);
+    }
+    else
+    {
+        channel->last_value = value;
+    }
     channel->last_publish_ms = now_ms;
     channel->published       = 1;
+}
 
-    strncpy(channel->last_text, text, sizeof(channel->last_text) - 1);
-    channel->last_text[sizeof(channel->last_text) - 1] = 0;
+// re-printing last_value gives exactly the text that was published
+static int
+modbusmq_channel_text_unchanged(const modbusmq_input_t *input, const modbusmq_channel_t *channel, const char *text)
+{
+    if (modbusmq_format_is_text(channel->format))
+    {
+        return modbusmq_text_hash(text) == channel->last_text_hash;
+    }
+
+    char
+        previous[MODBUSMQ_NUMBER_TEXT_MAX];
+
+    if (modbusmq_channel_format_value(input, channel, channel->last_value, previous, sizeof(previous)) < 0)
+    {
+        return 0;
+    }
+    return strcmp(text, previous) == 0;
 }
 
 /**
@@ -1712,10 +1750,11 @@ modbusmq_channel_publish_record(modbusmq_channel_t *channel, float value, const 
  * value and text (not the dropped one), so a real change is caught the first
  * time a poll lands outside the window rather than lost.
  *
- * On a publish decision this also updates channel->last_value,
- * channel->last_text, channel->last_publish_ms and channel->published, which
- * is why the channel pointer is non-const.
+ * On a publish decision this also updates channel->last_value (or
+ * last_text_hash for a text format), channel->last_publish_ms and
+ * channel->published, which is why the channel pointer is non-const.
  *
+ * @param input  : the channel's input, needed to re-print last_value
  * @param channel: channel definition and runtime state
  * @param value  : the scaled value just read
  * @param text   : that same value already formatted by modbusmq_channel_format_value()
@@ -1724,9 +1763,9 @@ modbusmq_channel_publish_record(modbusmq_channel_t *channel, float value, const 
  * @return 1 = publish, 0 = suppress, < 0 on bad arguments
  */
 int
-modbusmq_channel_publish_decide(modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms)
+modbusmq_channel_publish_decide(const modbusmq_input_t *input, modbusmq_channel_t *channel, float value, const char *text, millitime_t now_ms)
 {
-    if (!channel || !text)
+    if (!input || !channel || !text)
     {
         errno = EINVAL;
         return -1;
@@ -1755,7 +1794,7 @@ modbusmq_channel_publish_decide(modbusmq_channel_t *channel, float value, const 
     int
         change_gated = (channel->on_change || channel->min_change > 0 || channel->min_change_rel > 0);
 
-    if (change_gated && strcmp(text, channel->last_text) == 0)
+    if (change_gated && modbusmq_channel_text_unchanged(input, channel, text))
     {
         return 0;
     }

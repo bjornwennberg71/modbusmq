@@ -162,6 +162,8 @@ typedef enum modbusmq_data_format_e
 //
 #define MODBUSMQ_TEXT_BYTES_MAX 64
 #define MODBUSMQ_TEXT_MAX      140
+// "%.9f" of -FLT_MAX
+#define MODBUSMQ_NUMBER_TEXT_MAX 52
 
 //
 // Default strftime format for the time formats. ISO 8601, UTC, which is the
@@ -209,7 +211,6 @@ typedef struct modbusmq_channel_t
                                    // channel.nregisters instead, which is what
                                    // has_length records.
     int                     length;
-    uint8_t                 has_length;
     int                     format;
     int                     add;
     int                     mod;    // -10 = value/10, 100 = value * 100
@@ -228,21 +229,6 @@ typedef struct modbusmq_channel_t
                                    // MODBUSMQ_TIMEFMT_DEFAULT (or the date-only
                                    // variant) and UTC.
     char                   *timefmt;
-    uint8_t                 localtime;
-
-                                   // per-channel publish options. unset means
-                                   // take mqtt.retain / mqtt.qos
-    int                     retain;
-    uint8_t                 has_retain;
-    int                     qos;
-    uint8_t                 has_qos;
-
-                                   // Decimal places when formatting the value
-                                   // for output/publish. Unset means fall back
-                                   // to the type/format-driven default — see
-                                   // modbusmq_channel_format_value().
-    int                     decimals;
-    uint8_t                 has_decimals;
 
                                    // Publish rate limiting. Unset means take
                                    // the input-level default, and failing that
@@ -251,16 +237,10 @@ typedef struct modbusmq_channel_t
                                    // modbusmq_config_apply_publish_defaults()
                                    // right after parsing — the runtime never
                                    // has to fall back to the input or config.
-    uint8_t                 on_change; // suppress unless the printed text changed
     float                   min_change;
     float                   min_change_rel; // fraction of the value, e.g. 0.001 = 0.1%
     int                     min_interval;
     int                     max_interval;
-    uint8_t                 has_on_change;
-    uint8_t                 has_min_change;
-    uint8_t                 has_min_change_rel;
-    uint8_t                 has_min_interval;
-    uint8_t                 has_max_interval;
 
                                    // Runtime state for the decision above, not
                                    // config: what was last actually published,
@@ -270,22 +250,31 @@ typedef struct modbusmq_channel_t
                                    // fresh subscriber is not left waiting on a
                                    // suppressed channel.
                                    //
-                                   // last_text is what "unchanged" is actually
-                                   // judged against — the printed form, at the
-                                   // channel's own decimal count, not the raw
-                                   // float. last_value still backs min_change /
-                                   // min_change_rel, which are magnitude checks
-                                   // rather than text comparisons.
-                                   // last_text must hold the longest thing a
-                                   // channel can publish, not just a number:
-                                   // an ASCII serial number is routinely 32
-                                   // characters, and truncating it here would
-                                   // make two different devices compare equal
-                                   // and suppress the publish that says so.
-    float                   last_value;
-    char                    last_text[MODBUSMQ_TEXT_MAX];
+                                   // numeric re-prints last_value to compare; text has no float, so a hash
+    union
+    {
+        float               last_value;     // numeric formats
+        uint32_t            last_text_hash; // text formats
+    };
     millitime_t             last_publish_ms;
-    uint8_t                 published;
+
+                                   // bitfields truncate silently: range-check before assigning
+    uint8_t                 decimals; // 0..9, unset: format default
+    uint8_t                 has_decimals:1;
+    uint8_t                 has_length:1;
+    uint8_t                 localtime:1;
+    uint8_t                 retain:1; // unset: mqtt.retain / mqtt.qos
+    uint8_t                 has_retain:1;
+    uint8_t                 qos:2;
+    uint8_t                 has_qos:1;
+    uint8_t                 on_change:1; // suppress unless the printed text changed
+    uint8_t                 has_on_change:1;
+    uint8_t                 has_min_change:1;
+    uint8_t                 has_min_change_rel:1;
+    uint8_t                 has_min_interval:1;
+    uint8_t                 has_max_interval:1;
+    uint8_t                 published:1;
+    uint8_t                 na:1;
 } modbusmq_channel_t;
     
 //

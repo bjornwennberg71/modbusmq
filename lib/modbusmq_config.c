@@ -1936,38 +1936,44 @@ config_parse_stream(FILE *fp, const char *name)
                 }
                 else if (strcmp(channel_key, "retain") == 0)
                 {
-                    channel->retain = config_boolean(value);
-                    if (channel->retain < 0)
+                    int
+                        retain = config_boolean(value);
+                    if (retain < 0)
                     {
                         modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: expected 1/0, true/false or yes/no\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
                     }
+                    channel->retain     = retain;
                     channel->has_retain = 1;
                 }
                 else if (strcmp(channel_key, "qos") == 0)
                 {
-                    channel->qos = (int)strtol(value, NULL, 0);
-                    if (channel->qos < 0 || channel->qos > 2)
+                    long
+                        qos = strtol(value, NULL, 0);
+                    if (qos < 0 || qos > 2)
                     {
                         modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: qos must be 0, 1 or 2\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
                     }
+                    channel->qos     = qos;
                     channel->has_qos = 1;
                 }
                 else if (strcmp(channel_key, "decimals") == 0)
                 {
-                    channel->decimals = (int)strtol(value, NULL, 0);
-                    if (channel->decimals < 0 || channel->decimals > 9)
+                    long
+                        decimals = strtol(value, NULL, 0);
+                    if (decimals < 0 || decimals > 9)
                     {
                         modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s=%s: decimals must be between 0 and 9\n", line_num, key, value);
                         fclose(fp);
                         free(line);
                         return -1;
                     }
+                    channel->decimals     = decimals;
                     channel->has_decimals = 1;
                 }
                 else if (strcmp(channel_key, "on_change") == 0)
@@ -3118,7 +3124,6 @@ modbusmq_config_reset_publish_state(modbusmq_config_t *config)
 
             channel->published       = 0;
             channel->last_value      = 0;
-            channel->last_text[0]    = 0;
             channel->last_publish_ms = 0;
         }
     }

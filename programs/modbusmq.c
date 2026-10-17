@@ -605,7 +605,7 @@ modbusmq_subscription_callback(struct modbusmq_context_t *context, modbusmq_msg_
             modbusmq_channel_format_value(input, channel, f, value, sizeof(value));
         }
 
-        if (modbusmq_channel_publish_decide(channel, f, value, millitime()) == 0)
+        if (modbusmq_channel_publish_decide(input, channel, f, value, millitime()) == 0)
         {
             modbusmq_logf(MODBUSMQ_LOG_DEBUG, "%s=%s suppressed (unchanged or too soon)\n", channel->topic, value);
             continue;

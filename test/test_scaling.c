@@ -233,44 +233,55 @@ test_publish_decide(void)
 {
     printf("publish_decide\n");
 
+    modbusmq_input_t   input;
     modbusmq_channel_t channel;
+
+    memset(&input, 0, sizeof(input));
 
     // defaults are all off, so every poll publishes -- that is deliberate,
     // consumers read cadence as liveness
     memset(&channel, 0, sizeof(channel));
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1000), 1, "first publish");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1100), 1, "unchanged still publishes by default");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1000), 1, "first publish");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1100), 1, "unchanged still publishes by default");
 
     // on_change suppresses an identical printed value
     memset(&channel, 0, sizeof(channel));
     channel.on_change = 1;
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1000), 1, "on_change first publish");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1100), 0, "on_change suppresses identical text");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 2.0f, "2", 1200), 1, "on_change publishes a change");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1000), 1, "on_change first publish");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1100), 0, "on_change suppresses identical text");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 2.0f, "2", 1200), 1, "on_change publishes a change");
 
     // min_interval rate limits
     memset(&channel, 0, sizeof(channel));
     channel.min_interval = 1000;
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1000), 1, "min_interval first publish");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 2.0f, "2", 1500), 0, "min_interval suppresses too-soon");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 3.0f, "3", 2000), 1, "min_interval allows after the wait");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1000), 1, "min_interval first publish");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 2.0f, "2", 1500), 0, "min_interval suppresses too-soon");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 3.0f, "3", 2000), 1, "min_interval allows after the wait");
 
     // max_interval is a heartbeat: it beats on_change
     memset(&channel, 0, sizeof(channel));
     channel.on_change    = 1;
     channel.max_interval = 1000;
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1000), 1, "heartbeat first publish");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 1500), 0, "unchanged before heartbeat is due");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 1.0f, "1", 2000), 1, "heartbeat fires though unchanged");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1000), 1, "heartbeat first publish");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 1500), 0, "unchanged before heartbeat is due");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 1.0f, "1", 2000), 1, "heartbeat fires though unchanged");
 
     // min_change deadband
     memset(&channel, 0, sizeof(channel));
     channel.min_change = 1.0f;
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 10.0f, "10",   1000), 1, "deadband first publish");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 10.5f, "10.5", 1100), 0, "below deadband suppressed");
-    CHECK_INT(modbusmq_channel_publish_decide(&channel, 11.5f, "11.5", 1200), 1, "above deadband published");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 10.0f, "10",   1000), 1, "deadband first publish");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 10.5f, "10.5", 1100), 0, "below deadband suppressed");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 11.5f, "11.5", 1200), 1, "above deadband published");
 
-    CHECK(modbusmq_channel_publish_decide(NULL, 1.0f, "1", 1000) < 0, "null channel rejected");
+    // text channel: compared by hash
+    memset(&channel, 0, sizeof(channel));
+    channel.format    = modbusmq_data_format_ascii_ab;
+    channel.on_change = 1;
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 0, "SN123", 1000), 1, "text first publish");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 0, "SN123", 1100), 0, "text unchanged suppressed");
+    CHECK_INT(modbusmq_channel_publish_decide(&input, &channel, 0, "SN124", 1200), 1, "text change published");
+
+    CHECK(modbusmq_channel_publish_decide(&input, NULL, 1.0f, "1", 1000) < 0, "null channel rejected");
 }
 
 //
