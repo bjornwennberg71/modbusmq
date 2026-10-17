@@ -48,6 +48,7 @@ typedef struct modbusmq_connection_t
 {
     int            fd;
     modbusmq_msg_t msg;
+    millitime_t    last_rx_ms; // accept or last read, picks who to evict when full
 } modbusmq_connection_t;
 
 modbusmq_connection_t modbusmq_connections[MODBUSMQ_CONNECTION_MAX];
@@ -1488,34 +1489,49 @@ main(int argc, char **argv)
                 set_nonblocking(new_fd);
                 set_short_linger(new_fd);
 
-                int accepted = 0;
+                int
+                    slot   = -1,
+                    oldest = 0;
+
                 for (int i = 0; i < MODBUSMQ_CONNECTION_MAX; ++i)
                 {
                     if (modbusmq_connections[i].fd == 0)
                     {
-                        modbusmq_logf(MODBUSMQ_LOG_INFO, "TCP Client connect\n");
-                        memset(&modbusmq_connections[i], 0, sizeof(modbusmq_connection_t));
-
-                        modbusmq_connections[i].fd = new_fd;
-
-
-                        modbusmq_connections[i].msg.frame[0].is_writer = 0;
-                        modbusmq_connections[i].msg.frame[0].is_tcp = 1;
-
-                        //modbusmq_connections[i].msg.frame[1].length = 12; // HACK
-                        modbusmq_connections[i].msg.frame[1].is_writer = 1; // HACK
-                        modbusmq_connections[i].msg.frame[1].is_tcp = 1;
-
-                        accepted = 1;
+                        slot = i;
                         break;
+                    }
+                    if (modbusmq_connections[i].last_rx_ms < modbusmq_connections[oldest].last_rx_ms)
+                    {
+                        oldest = i;
                     }
                 }
 
-                if (!accepted)
+                //
+                // Full: a master reset without FIN/RST leaves a half-open
+                // client forever, so drop the least recently active one
+                // rather than turn the new client away.
+                //
+                if (slot < 0)
                 {
-                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "No free connection slot (max %d), rejecting client\n", MODBUSMQ_CONNECTION_MAX);
-                    close(new_fd);
+                    slot = oldest;
+                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "No free connection slot (max %d), dropping client fd %d, idle %llu ms\n",
+                                  MODBUSMQ_CONNECTION_MAX, modbusmq_connections[slot].fd,
+                                  (unsigned long long)(millitime() - modbusmq_connections[slot].last_rx_ms));
+                    close(modbusmq_connections[slot].fd);
                 }
+
+                modbusmq_logf(MODBUSMQ_LOG_INFO, "TCP Client connect\n");
+                memset(&modbusmq_connections[slot], 0, sizeof(modbusmq_connection_t));
+
+                modbusmq_connections[slot].fd         = new_fd;
+                modbusmq_connections[slot].last_rx_ms = millitime();
+
+                modbusmq_connections[slot].msg.frame[0].is_writer = 0;
+                modbusmq_connections[slot].msg.frame[0].is_tcp = 1;
+
+                //modbusmq_connections[slot].msg.frame[1].length = 12; // HACK
+                modbusmq_connections[slot].msg.frame[1].is_writer = 1; // HACK
+                modbusmq_connections[slot].msg.frame[1].is_tcp = 1;
             }
         }
 
@@ -1557,6 +1573,7 @@ main(int argc, char **argv)
                     }                        
                     else
                     {
+                        connection->last_rx_ms = millitime();
                         //modbusmq_logf(MODBUSMQ_LOG_INFO, "req read bytes=%d\n", rc);
                         //modbusmq_msg_debug(context, &connection->msg, 0);
                                 
