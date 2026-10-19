@@ -28,6 +28,7 @@ typedef struct global_info
 {
     const char *filename;
     int         convert;  // --convert: print the converted file to stdout
+    int         allow_unknown; // --allow-unknown: unknown keys are printed but do not count as warnings
     int         warnings; // log lines seen during a successful parse
 } global_info;
 
@@ -54,10 +55,11 @@ void
 print_help(int argc, char **argv)
 {
     (void)argc;
-    printf("usage: %s -c file.config [--convert]\n", argv[0]);
+    printf("usage: %s -c file.config [--convert] [--allow-unknown]\n", argv[0]);
     printf("-c file    : the config to check\n");
     printf("--convert  : rename old keys and print the converted config to stdout;\n");
     printf("             the check then runs on the converted text\n");
+    printf("--allow-unknown : print unknown keys, but do not count them as warnings\n");
     printf("--version  : print the version\n");
     printf("\n");
     printf("Findings go to stderr. Exit code: 0 clean, 1 warnings, 255 errors.\n");
@@ -85,6 +87,10 @@ parse_argv(int argc, char **argv)
         else if (strcmp(argv[a], "--convert") == 0)
         {
             GI.convert = 1;
+        }
+        else if (strcmp(argv[a], "--allow-unknown") == 0)
+        {
+            GI.allow_unknown = 1;
         }
         else if (strcmp(argv[a], "-c") == 0 && a + 1 < argc)
         {
@@ -193,7 +199,10 @@ unknown_handler(int line, const char *key, const char *value, void *user)
     (void)value;
     (void)user;
     fprintf(stderr, "%s: %d: %s: unknown key\n", GI.filename, line, key);
-    GI.warnings++;
+    if (!GI.allow_unknown)
+    {
+        GI.warnings++;
+    }
 }
 
 //
