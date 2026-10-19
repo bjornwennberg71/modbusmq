@@ -610,16 +610,10 @@ modbusmq_rtu_connect(modbusmq_context_t *context)
         tios;
     speed_t
         speed;
+    // start from zero, never from the port's current settings: an inherited ICRNL turned every received 0x0D
+    // into 0x0A (2026-10-19, CRC mismatches on Shoto status 0x0D00); only the flags set below are on
     memset(&tios, 0, sizeof(struct termios));
-    
-    rc = tcgetattr(sd, &tios);
-    if (rc < 0)
-    {
-        modbusmq_logf(MODBUSMQ_LOG_ERROR, "tcgetattr: %s\n", strerror(errno));
-        close(sd);
-        return -1;
-    }
-    
+
     /*
     On MacOS, constants of baud rates are equal to the integer in argument but
     that's not the case under Linux so we have to find the corresponding
@@ -1396,6 +1390,16 @@ modbusmq_rtu_msg_check(modbusmq_context_t *context, modbusmq_msg_t *msg)
                                  "(res slave %d function 0x%02X). action: discard frame and resync\n",
                       modbusmq_msg_tag(context, msg), crc_compute, crc_res,
                       reader->buf[0], reader->buf[1]);
+        // the bytes as received, so a device fault can be told from line noise; capped to fit one log line
+        char hex[64 * 3 + 4];
+        int used = 0;
+        for (int i = 0; i < reader->length && i < 64; ++i)
+        {
+            used += snprintf(hex + used, sizeof(hex) - used, "%02X ", reader->buf[i]);
+        }
+        snprintf(hex + used, sizeof(hex) - used, "%s", reader->length > 64 ? "..." : "");
+        modbusmq_logf(MODBUSMQ_LOG_ERROR, "%s CRC mismatch frame (%d bytes): %s\n", modbusmq_msg_tag(context, msg),
+                      reader->length, hex);
         return -2;
     }
     
