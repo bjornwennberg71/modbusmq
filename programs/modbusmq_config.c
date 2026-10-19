@@ -30,6 +30,13 @@ typedef struct global_info
     int         convert;  // --convert: print the converted file to stdout
     int         allow_unknown; // --allow-unknown: unknown keys are printed but do not count as warnings
     int         warnings; // log lines seen during a successful parse
+    char       *foreign;  // config.foreign prefixes, space separated
+    int         nunknown;
+    struct
+    {
+        int   line;
+        char *key;
+    }          *unknown;  // held until the parse ends, so config.foreign may come after the keys it covers
 } global_info;
 
 static global_info GI;
@@ -63,6 +70,7 @@ print_help(int argc, char **argv)
     printf("--version  : print the version\n");
     printf("\n");
     printf("Findings go to stderr. Exit code: 0 clean, 1 warnings, 255 errors.\n");
+    printf("Keys under a prefix the config declares with config.foreign = pxbank. other. are not reported.\n");
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -196,12 +204,77 @@ log_handler(int level, const char *message, void *user)
 static void
 unknown_handler(int line, const char *key, const char *value, void *user)
 {
-    (void)value;
     (void)user;
-    fprintf(stderr, "%s: %d: %s: unknown key\n", GI.filename, line, key);
-    if (!GI.allow_unknown)
+    if (strcmp(key, "config.foreign") == 0)
     {
+        size_t length = (GI.foreign ? strlen(GI.foreign) : 0) + strlen(value) + 2;
+        char *foreign = realloc(GI.foreign, length);
+        if (!foreign)
+        {
+            fprintf(stderr, "%s: unable to allocate\n", GI.filename);
+            GI.warnings++;
+            return;
+        }
+        if (!GI.foreign)
+        {
+            foreign[0] = 0;
+        }
+        GI.foreign = foreign;
+        strcat(strcat(GI.foreign, " "), value);
+        return;
+    }
+
+    void *unknown = realloc(GI.unknown, (GI.nunknown + 1) * sizeof(*GI.unknown));
+    if (!unknown)
+    {
+        fprintf(stderr, "%s: unable to allocate\n", GI.filename);
         GI.warnings++;
+        return;
+    }
+    GI.unknown = unknown;
+    GI.unknown[GI.nunknown].line = line;
+    GI.unknown[GI.nunknown].key  = strdup(key);
+    GI.nunknown++;
+}
+
+//
+// @brief whether key starts with one of the config.foreign prefixes
+//
+static int
+is_foreign(const char *key)
+{
+    const char *p = GI.foreign;
+    while (p && *p)
+    {
+        p += strspn(p, " ,");
+        size_t length = strcspn(p, " ,");
+        if (length > 0 && strncmp(key, p, length) == 0)
+        {
+            return 1;
+        }
+        p += length;
+    }
+    return 0;
+}
+
+//
+// @brief report the unknown keys no config.foreign prefix covers
+//
+static void
+report_unknown(void)
+{
+    for (int i = 0; i < GI.nunknown; ++i)
+    {
+        const char *key = GI.unknown[i].key ? GI.unknown[i].key : "?";
+        if (is_foreign(key))
+        {
+            continue;
+        }
+        fprintf(stderr, "%s: %d: %s: unknown key\n", GI.filename, GI.unknown[i].line, key);
+        if (!GI.allow_unknown)
+        {
+            GI.warnings++;
+        }
     }
 }
 
@@ -284,6 +357,7 @@ main(int argc, char **argv)
     rc = modbusmq_config_parse_text(text, text_len);
 
 report:
+    report_unknown();
     if (rc < 0)
     {
         fprintf(stderr, "%s: error, the library refuses this config\n", GI.filename);
@@ -313,5 +387,11 @@ cleanup:
     }
     free(line);
     free(text);
+    for (int i = 0; i < GI.nunknown; ++i)
+    {
+        free(GI.unknown[i].key);
+    }
+    free(GI.unknown);
+    free(GI.foreign);
     return rc;
 }
