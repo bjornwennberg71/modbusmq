@@ -185,6 +185,18 @@ log_handler(int level, const char *message, void *user)
 }
 
 //
+// @brief a key the library skipped: a typo, or a key another program keeps here
+//
+static void
+unknown_handler(int line, const char *key, const char *value, void *user)
+{
+    (void)value;
+    (void)user;
+    fprintf(stderr, "%s: %d: %s: unknown key\n", GI.filename, line, key);
+    GI.warnings++;
+}
+
+//
 // @brief faults the parser accepts but that will not work as meant
 //
 static void
@@ -227,6 +239,7 @@ main(int argc, char **argv)
     }
 
     modbusmq_log_set_handler(log_handler, NULL);
+    modbusmq_config_set_unknown_handler(unknown_handler, NULL);
 
     if (!GI.convert)
     {
@@ -281,7 +294,7 @@ report:
     fprintf(stderr, "%s: ok\n", GI.filename);
 
 cleanup:
-    if (rc != 0 && !GI.convert)
+    if (rc < 0 && !GI.convert)
     {
         fprintf(stderr, "%s: a config from before 2.5.3 needs --convert for its time keys\n", GI.filename);
     }

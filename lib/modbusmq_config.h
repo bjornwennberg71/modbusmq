@@ -533,6 +533,13 @@ extern void                modbusmq_config_set_overrides(char *const *overrides,
 extern int                 modbusmq_config_override_unmatched(void);
 
 //
+// Keys the parser does not know are skipped silently, so other programs can
+// keep their own keys in the same file. Set a handler before parsing to see them.
+//
+typedef void (*modbusmq_config_unknown_handler_t)(int line, const char *key, const char *value, void *user);
+extern void                modbusmq_config_set_unknown_handler(modbusmq_config_unknown_handler_t handler, void *user);
+
+//
 // Clear every channel's publish state (published/last_value/last_publish_ms).
 //
 // Call this whenever the MQTT connection is (re)established. A broker restart

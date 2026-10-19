@@ -200,6 +200,19 @@ test_overrides(const char *filename)
     modbusmq_free(context); // closes the config as well
 }
 
+static int
+    sUnknownKeys = 0;
+
+static void
+count_unknown(int line, const char *key, const char *value, void *user)
+{
+    (void)line;
+    (void)key;
+    (void)value;
+    (void)user;
+    sUnknownKeys++;
+}
+
 //
 // The parser's rules, one inline config each.
 //
@@ -303,6 +316,21 @@ test_rules(void)
         CHECK_INT(modbusmq_config_get()->input_max, 320, "...320 inputs");
         CHECK_STR(modbusmq_config_get()->inputs[319].channels[8].topic, "b/31/10/9", "...last topic");
         CHECK_INT(modbusmq_config_get()->inputs[319].slave, 70, "...last slave");
+    }
+
+    // keys the parser does not know are skipped, and reach a handler when one is set
+    {
+        const char
+            *body = "myapp.thing = 1\n"
+                    "input.max = 1\n"
+                    FIXED_INPUT(1, "t")
+                    "input.1.bogus = 2\n"
+                    "input.1.channel.1.typo = 3\n";
+        CHECK_INT(parse_text(body, NULL, 0), 0, "unknown keys are not an error");
+        modbusmq_config_set_unknown_handler(count_unknown, NULL);
+        CHECK_INT(parse_text(body, NULL, 0), 0, "...with a handler either");
+        CHECK_INT(sUnknownKeys, 3, "...which sees all three");
+        modbusmq_config_set_unknown_handler(NULL, NULL);
     }
 
     modbusmq_config_close();

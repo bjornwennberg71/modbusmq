@@ -623,6 +623,26 @@ modbusmq_config_set_overrides(char *const *overrides, int noverrides)
     }
 }
 
+static modbusmq_config_unknown_handler_t config_unknown_handler = 0;
+static void                              *config_unknown_user    = 0;
+
+void
+modbusmq_config_set_unknown_handler(modbusmq_config_unknown_handler_t handler, void *user)
+{
+    config_unknown_handler = handler;
+    config_unknown_user    = user;
+}
+
+// keys other programs keep in the same file are none of the parser's business
+static void
+config_unknown_key(int line_num, const char *key, const char *value)
+{
+    if (config_unknown_handler)
+    {
+        config_unknown_handler(line_num, key, value, config_unknown_user);
+    }
+}
+
 //
 // @brief Look up key in the override list.
 //
@@ -1663,7 +1683,7 @@ config_parse_stream(FILE *fp, const char *name)
             }
             if (rc > 0)
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown config\n", line_num, key);
+                config_unknown_key(line_num, key, value);
             }
             else if (key[7] == 'c')
             {
@@ -2126,10 +2146,14 @@ config_parse_stream(FILE *fp, const char *name)
                     }
                     channel->has_max_interval = 1;
                 }
+                else
+                {
+                    config_unknown_key(line_num, key, value);
+                }
             }
             else
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
+                config_unknown_key(line_num, key, value);
                 continue;
             }
             
@@ -2444,13 +2468,13 @@ config_parse_stream(FILE *fp, const char *name)
                 }
                 else
                 {
-                    modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
+                    config_unknown_key(line_num, key, value);
                     continue;
                 }
             }
             else
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown configuration\n", line_num, key);
+                config_unknown_key(line_num, key, value);
                 continue;
             }
         }
@@ -2575,7 +2599,7 @@ config_parse_stream(FILE *fp, const char *name)
         {
             if (strlen(key))
             {
-                modbusmq_logf(MODBUSMQ_LOG_ERROR, "%d: %s: Unknown config\n", line_num, key);
+                config_unknown_key(line_num, key, value);
             }
         }
     }
