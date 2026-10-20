@@ -1332,13 +1332,12 @@ main(int argc, char **argv)
     //
     // live values from MQTT, off unless emu.connect is set
     //
-    const char
-        *emu_connect = server_option("emu.connect"),
-        *emu_prefix  = server_option("emu.prefix");
+    const char *emu_connect = server_option("emu.connect");
 
     if (emu_connect && strlen(emu_connect) > 0)
     {
 #if MQTT_ENABLED
+        const char *emu_prefix = server_option("emu.prefix");
         if (!emu_prefix || strlen(emu_prefix) == 0)
         {
             emu_prefix = "emu/";
