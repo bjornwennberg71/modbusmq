@@ -5,7 +5,7 @@
 // modbusmq_config.c
 //
 // Check a config for faults, and with --convert rewrite the key names that
-// changed (2.5.3: time keys carry their unit) so an old config keeps working.
+// changed (2.6.0: time keys carry their unit) so an old config keeps working.
 // The library knows only the new names; the old ones live here.
 //
 
@@ -379,7 +379,7 @@ report:
 cleanup:
     if (rc < 0 && !GI.convert)
     {
-        fprintf(stderr, "%s: a config from before 2.5.3 needs --convert for its time keys\n", GI.filename);
+        fprintf(stderr, "%s: a config from before 2.6.0 needs --convert for its time keys\n", GI.filename);
     }
     if (in)
     {

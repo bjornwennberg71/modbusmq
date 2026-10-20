@@ -16,8 +16,8 @@
 // DEFINES ///////////////////////////////////////////////////////////////////
 
 #define MODBUSMQ_VERSION_MAJOR 2
-#define MODBUSMQ_VERSION_MINOR 5
-#define MODBUSMQ_VERSION_BUILD 3
+#define MODBUSMQ_VERSION_MINOR 6
+#define MODBUSMQ_VERSION_BUILD 0
 
 #define MODBUSMQ_STRINGIFY_(x) #x
 #define MODBUSMQ_STRINGIFY(x)  MODBUSMQ_STRINGIFY_(x)
@@ -140,7 +140,7 @@ extern int  modbusmq_loop_write_read(struct modbusmq_context_t *context, int rev
     // none is due sooner. Pass 0 for no ceiling of your own and get the 1000 ms
     // default.
     //
-    // poll_events is out only: it is overwritten, not ORed into (2.5.3), so add
+    // poll_events is out only: it is overwritten, not ORed into (2.6.0), so add
     // any bits of your own after the call.
 extern int modbusmq_loop_prepare(    struct modbusmq_context_t *context, millitime_t *sleep_time, int16_t *poll_events);
 

@@ -208,7 +208,7 @@ This is the part that matters, and the reason the library exists.
 Two calls drive it. `modbusmq_loop_prepare()` tells you what to wait for:
 it returns the file descriptor (or `< 0` if the connection is gone), fills in how
 long you may sleep, and sets the poll events the library currently wants.
-It overwrites `events` rather than ORing into it (since 2.5.3), so add any bits
+It overwrites `events` rather than ORing into it (since 2.6.0), so add any bits
 of your own after the call.
 `modbusmq_loop_write_read()` takes the `revents` you got back and advances the
 state machine — writing the pending request, or reading the response, as the
