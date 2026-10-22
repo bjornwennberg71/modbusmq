@@ -784,6 +784,25 @@ modbusmq_reset_queue(modbusmq_context_t *context)
     context->msg_wrapper_head = NULL;
 
     // the device may have been swapped or reflashed: read the once values again
+    modbusmq_once_rearm(context);
+}
+
+/**
+ *
+ * @brief reads every once input again on the next loop
+ *
+ * For a caller that lost the first replies, e.g. read before its MQTT connect.
+ *
+ * @param context: allocated context
+ * @return nothing
+ */
+void
+modbusmq_once_rearm(modbusmq_context_t *context)
+{
+    if (!context)
+    {
+        return;
+    }
     for(modbusmq_timer_t *timer = context->timer_head; timer; timer = timer->next)
     {
         if (timer->is_once)

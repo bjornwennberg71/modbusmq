@@ -209,6 +209,8 @@ extern int  modbusmq_post(                struct modbusmq_context_t *context, mo
 //
 typedef void (*modbusmq_raw_reply_t)(struct modbusmq_context_t *context, const char *reply, void *user);
 extern int  modbusmq_raw_request(         struct modbusmq_context_t *context, const char *text, modbusmq_raw_reply_t reply_cb, void *user);
+// read every once input again on the next loop (e.g. the first replies came before the caller could publish them)
+extern void modbusmq_once_rearm(          struct modbusmq_context_t *context);
 // subscribe to message every interval in ms, or MODBUSMQ_INTERVAL_ONCE
 #define MODBUSMQ_INTERVAL_ONCE   (-1)    // read at start and after each reset/reconnect, then never again
 #define MODBUSMQ_ONCE_RETRY_MS   10000   // a once read that got no valid reply is retried this often
